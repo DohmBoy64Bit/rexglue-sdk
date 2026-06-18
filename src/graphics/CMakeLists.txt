@@ -132,10 +132,6 @@ if(REXGLUE_USE_VULKAN)
     )
     target_link_libraries(rexgraphics PRIVATE
         glslang
-        MachineIndependent
-        GenericCodeGen
-        OSDependent
-        OGLCompiler
     )
     target_compile_definitions(rexgraphics PUBLIC REX_HAS_VULKAN=1)
 endif()

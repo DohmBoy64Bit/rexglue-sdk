@@ -301,21 +301,17 @@ if(REXGLUE_USE_VULKAN)
 
     # glslang/SPIRV - SPIR-V code generation for shader translation
     set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
-    set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SPIRV ON CACHE BOOL "" FORCE)
     set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
     set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
     set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-    set(SKIP_GLSLANG_INSTALL ON CACHE BOOL "" FORCE)
+    set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
     # Enable RTTI for spv::Builder inheritance in SpirvBuilder
     set(ENABLE_RTTI ON CACHE BOOL "" FORCE)
 
     # Set policy minimum for older glslang versions with outdated cmake_minimum_required
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
     add_subdirectory(glslang)
-    # Create alias for older glslang versions that don't provide it
-    if(NOT TARGET glslang::SPIRV)
-        add_library(glslang::SPIRV ALIAS SPIRV)
-    endif()
 endif()
 
 #=============================================================================
