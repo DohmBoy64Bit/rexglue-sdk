@@ -30,10 +30,13 @@ These rules govern every change imported from Xenia Canary into ReXGlue:
 
 | # | Subsystem | Deviation | Rationale | Date |
 |---|-----------|-----------|-----------|------|
-|   |           |           |           |      |
+| 1 | glslang CMake | Removed OGLCompiler/OSDependent link deps | Folded into glslang lib in 16.0.0 | 2026-06-18 |
+| 2 | glslang CMake | Removed MachineIndependent/GenericCodeGen link deps | Empty stubs in 16.0.0 | 2026-06-18 |
+| 3 | glslang CMake | Removed glslang::SPIRV alias compat block | Provided natively in 16.0.0 | 2026-06-18 |
 
 ## Import Log
 
 | Date | Subsystem | File(s) | Canary Commit | Reason | Status |
 |------|-----------|---------|---------------|--------|--------|
-|      |           |         |               |        |        |
+| 2026-06-18 | deps/glslang | `thirdparty/glslang`, `thirdparty/CMakeLists.txt`, `src/graphics/CMakeLists.txt` | a57276bf (16.0.0) | Update from 2020 pre-release to match Canary's glslang version. Required CMake option renames and link dependency removal. | ✅ Complete |
+| 2026-06-18 | deps/verification | — | — | CMake configure verified with D3D12 backend on Clang 22.1.6. Build blocked by pre-existing SSSE3 simde issue (unrelated). | ⚠️ Configure OK |
