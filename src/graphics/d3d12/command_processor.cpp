@@ -174,10 +174,6 @@ void D3D12CommandProcessor::RestoreEdramSnapshot(const void* snapshot) {
 
 bool D3D12CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader,
                                                                uint32_t packet, uint32_t count) {
-  if (!REXCVAR_GET(occlusion_query_enable) || !occlusion_query_resources_available_) {
-    return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(reader, packet, count);
-  }
-
   const uint32_t kQueryFinished = rex::byte_swap(0xFFFFFEED);
   assert_true(count == 1);
   uint32_t initiator = reader->ReadAndSwap<uint32_t>();
@@ -189,6 +185,28 @@ bool D3D12CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffe
   if (!sample_counts) {
     DisableHostOcclusionQueries();
     return true;
+  }
+
+  // When ROV/PSI is active, use the ZPD ROV counter instead of host occlusion
+  // queries. The shader atomically adds passed MSAA samples to a counter UAV,
+  // and we read back the counter value at the end of the ZPD segment.
+  bool edram_rov_used =
+      render_target_cache_->GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
+  if (edram_rov_used && zpd_rov_counter_resources_available_) {
+    bool is_end_via_z_pass =
+        sample_counts->ZPass_A == kQueryFinished && sample_counts->ZPass_B == kQueryFinished;
+    bool is_end_via_z_fail =
+        sample_counts->ZFail_A == kQueryFinished && sample_counts->ZFail_B == kQueryFinished;
+    bool is_end = is_end_via_z_pass || is_end_via_z_fail;
+
+    if (!is_end) {
+      return BeginZpdRovCounterSegment(sample_count_addr);
+    }
+    return EndZpdRovCounterSegment(sample_count_addr, sample_counts);
+  }
+
+  if (!REXCVAR_GET(occlusion_query_enable) || !occlusion_query_resources_available_) {
+    return CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(reader, packet, count);
   }
 
   auto write_fallback_result = [sample_counts, kQueryFinished]() -> bool {
@@ -385,8 +403,8 @@ ID3D12RootSignature* D3D12CommandProcessor::GetRootSignature(const DxbcShader* v
     parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
   }
 
-  // Shared memory and, if ROVs are used, EDRAM.
-  D3D12_DESCRIPTOR_RANGE shared_memory_and_edram_ranges[3];
+  // Shared memory and, if ROVs are used, EDRAM and ZPD counter.
+  D3D12_DESCRIPTOR_RANGE shared_memory_and_edram_ranges[4];
   {
     auto& parameter = parameters[kRootParameter_Bindful_SharedMemoryAndEdram];
     parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -414,6 +432,14 @@ ID3D12RootSignature* D3D12CommandProcessor::GetRootSignature(const DxbcShader* v
           UINT(DxbcShaderTranslator::UAVRegister::kEdram);
       shared_memory_and_edram_ranges[2].RegisterSpace = 0;
       shared_memory_and_edram_ranges[2].OffsetInDescriptorsFromTableStart = 2;
+      // ZPD ROV counter UAV (raw buffer for atomic-add).
+      ++parameter.DescriptorTable.NumDescriptorRanges;
+      shared_memory_and_edram_ranges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+      shared_memory_and_edram_ranges[3].NumDescriptors = 1;
+      shared_memory_and_edram_ranges[3].BaseShaderRegister =
+          UINT(DxbcShaderTranslator::UAVRegister::kZpdRovCounter);
+      shared_memory_and_edram_ranges[3].RegisterSpace = 0;
+      shared_memory_and_edram_ranges[3].OffsetInDescriptorsFromTableStart = 3;
     }
   }
 
@@ -1643,6 +1669,7 @@ bool D3D12CommandProcessor::SetupContext() {
   pix_capture_requested_.store(false, std::memory_order_relaxed);
   pix_capturing_ = false;
   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
+  zpd_rov_counter_resources_available_ = InitializeZpdRovCounterResources();
 
   // Just not to expose uninitialized memory.
   std::memset(&system_constants_, 0, sizeof(system_constants_));
@@ -1654,6 +1681,7 @@ void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
   InvalidateAllVertexBufferResidency();
   ShutdownOcclusionQueryResources();
+  ShutdownZpdRovCounterResources();
 
   ui::d3d12::util::ReleaseAndNull(readback_buffer_);
   readback_buffer_size_ = 0;
@@ -4058,6 +4086,9 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
     dirty |=
         system_constants_.edram_blend_constant[3] != regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA);
     system_constants_.edram_blend_constant[3] = regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA);
+
+    dirty |= system_constants_.zpd_rov_counter_index != zpd_rov_counter_index_;
+    system_constants_.zpd_rov_counter_index = zpd_rov_counter_index_;
   }
 
   cbuffer_binding_system_.up_to_date &= !dirty;
@@ -4546,9 +4577,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
     // textures.
     size_t view_count_full_update = 4 + texture_count_vertex + texture_count_pixel;
     if (edram_rov_used) {
-      // + EDRAM UAV in two tables (with the shared memory SRV and with the
-      // shared memory UAV).
-      view_count_full_update += 2;
+      // + EDRAM UAV and ZPD counter UAV in two tables (with the shared memory
+      // SRV and with the shared memory UAV).
+      view_count_full_update += 4;
     }
     D3D12_CPU_DESCRIPTOR_HANDLE view_cpu_handle;
     D3D12_GPU_DESCRIPTOR_HANDLE view_gpu_handle;
@@ -4601,8 +4632,13 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
         render_target_cache_->WriteEdramUintPow2UAVDescriptor(view_cpu_handle, 2);
         view_cpu_handle.ptr += descriptor_size_view;
         view_gpu_handle.ptr += descriptor_size_view;
+        ui::d3d12::util::CreateBufferRawUAV(device, view_cpu_handle,
+                                            zpd_rov_counter_buffer_.Get(),
+                                            sizeof(uint32_t) * kMaxZpdCounters);
+        view_cpu_handle.ptr += descriptor_size_view;
+        view_gpu_handle.ptr += descriptor_size_view;
       }
-      // Null SRV + UAV + EDRAM.
+      // Null SRV + UAV + EDRAM + ZPD counter.
       gpu_handle_shared_memory_uav_and_edram_ = view_gpu_handle;
       ui::d3d12::util::CreateBufferRawSRV(device, view_cpu_handle, nullptr, 0);
       view_cpu_handle.ptr += descriptor_size_view;
@@ -4612,6 +4648,11 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
       view_gpu_handle.ptr += descriptor_size_view;
       if (edram_rov_used) {
         render_target_cache_->WriteEdramUintPow2UAVDescriptor(view_cpu_handle, 2);
+        view_cpu_handle.ptr += descriptor_size_view;
+        view_gpu_handle.ptr += descriptor_size_view;
+        ui::d3d12::util::CreateBufferRawUAV(device, view_cpu_handle,
+                                            zpd_rov_counter_buffer_.Get(),
+                                            sizeof(uint32_t) * kMaxZpdCounters);
         view_cpu_handle.ptr += descriptor_size_view;
         view_gpu_handle.ptr += descriptor_size_view;
       }
@@ -5045,6 +5086,204 @@ void D3D12CommandProcessor::WriteGuestOcclusionResult(
   sample_counts->ZFail_B = 0;
   sample_counts->StencilFail_A = 0;
   sample_counts->StencilFail_B = 0;
+}
+
+bool D3D12CommandProcessor::InitializeZpdRovCounterResources() {
+  zpd_rov_counter_buffer_.Reset();
+  zpd_rov_counter_clear_buffer_.Reset();
+  zpd_rov_counter_readback_.Reset();
+  zpd_rov_counter_readback_mapping_ = nullptr;
+  zpd_rov_counter_cursor_ = 0;
+  zpd_rov_counter_index_ = UINT32_MAX;
+
+  ID3D12Device* device = GetD3D12Provider().GetDevice();
+  if (!device) {
+    return false;
+  }
+
+  uint32_t buffer_size = sizeof(uint32_t) * kMaxZpdCounters;
+
+  D3D12_RESOURCE_DESC buffer_desc;
+  ui::d3d12::util::FillBufferResourceDesc(buffer_desc, buffer_size,
+                                          D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
+                                             GetD3D12Provider().GetHeapFlagCreateNotZeroed(),
+                                             &buffer_desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                             nullptr, IID_PPV_ARGS(&zpd_rov_counter_buffer_)))) {
+    REXGPU_WARN(
+        "D3D12CommandProcessor: Failed to create ZPD ROV counter buffer, ZPD counting disabled");
+    return false;
+  }
+
+  // Small upload buffer containing all zeros, used to clear counter entries.
+  ui::d3d12::util::FillBufferResourceDesc(buffer_desc, buffer_size, D3D12_RESOURCE_FLAG_NONE);
+  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesUpload,
+                                             GetD3D12Provider().GetHeapFlagCreateNotZeroed(),
+                                             &buffer_desc, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                             nullptr, IID_PPV_ARGS(&zpd_rov_counter_clear_buffer_)))) {
+    REXGPU_WARN(
+        "D3D12CommandProcessor: Failed to create ZPD ROV counter clear buffer, ZPD counting "
+        "disabled");
+    zpd_rov_counter_buffer_.Reset();
+    return false;
+  }
+  // Initialize the clear buffer to zero on the CPU side.
+  {
+    D3D12_RANGE write_range = {0, buffer_size};
+    void* clear_mapping = nullptr;
+    if (SUCCEEDED(zpd_rov_counter_clear_buffer_->Map(0, &write_range, &clear_mapping))) {
+      std::memset(clear_mapping, 0, buffer_size);
+      zpd_rov_counter_clear_buffer_->Unmap(0, nullptr);
+    }
+  }
+
+  ui::d3d12::util::FillBufferResourceDesc(buffer_desc, buffer_size, D3D12_RESOURCE_FLAG_NONE);
+  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesReadback,
+                                             GetD3D12Provider().GetHeapFlagCreateNotZeroed(),
+                                             &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                             IID_PPV_ARGS(&zpd_rov_counter_readback_)))) {
+    REXGPU_WARN(
+        "D3D12CommandProcessor: Failed to create ZPD ROV counter readback buffer, ZPD counting "
+        "disabled");
+    zpd_rov_counter_clear_buffer_.Reset();
+    zpd_rov_counter_buffer_.Reset();
+    return false;
+  }
+
+  D3D12_RANGE read_range = {0, buffer_size};
+  void* mapping = nullptr;
+  if (FAILED(zpd_rov_counter_readback_->Map(0, &read_range, &mapping))) {
+    REXGPU_WARN(
+        "D3D12CommandProcessor: Failed to map ZPD ROV counter readback buffer, ZPD counting "
+        "disabled");
+    zpd_rov_counter_readback_.Reset();
+    zpd_rov_counter_clear_buffer_.Reset();
+    zpd_rov_counter_buffer_.Reset();
+    return false;
+  }
+
+  zpd_rov_counter_readback_mapping_ = reinterpret_cast<uint32_t*>(mapping);
+  return true;
+}
+
+void D3D12CommandProcessor::ShutdownZpdRovCounterResources() {
+  zpd_rov_counter_index_ = UINT32_MAX;
+
+  if (zpd_rov_counter_readback_ && zpd_rov_counter_readback_mapping_) {
+    zpd_rov_counter_readback_->Unmap(0, nullptr);
+  }
+  zpd_rov_counter_readback_mapping_ = nullptr;
+  zpd_rov_counter_readback_.Reset();
+  zpd_rov_counter_clear_buffer_.Reset();
+  zpd_rov_counter_buffer_.Reset();
+  zpd_rov_counter_resources_available_ = false;
+}
+
+uint32_t D3D12CommandProcessor::AcquireZpdCounterIndex() {
+  if (zpd_rov_counter_cursor_ >= kMaxZpdCounters) {
+    zpd_rov_counter_cursor_ = 0;
+  }
+  return zpd_rov_counter_cursor_++;
+}
+
+bool D3D12CommandProcessor::BeginZpdRovCounterSegment(uint32_t sample_count_address) {
+  if (!zpd_rov_counter_resources_available_ || !zpd_rov_counter_buffer_ ||
+      !zpd_rov_counter_clear_buffer_) {
+    return false;
+  }
+
+  uint32_t counter_index = AcquireZpdCounterIndex();
+  zpd_rov_counter_index_ = counter_index;
+
+  if (!BeginSubmission(true)) {
+    zpd_rov_counter_index_ = UINT32_MAX;
+    return false;
+  }
+
+  // Transition UAV -> COPY_DEST for clear, then copy zero from clear buffer.
+  D3D12_RESOURCE_BARRIER zpd_uav_to_copy_dest = {};
+  zpd_uav_to_copy_dest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  zpd_uav_to_copy_dest.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+  zpd_uav_to_copy_dest.Transition.pResource = zpd_rov_counter_buffer_.Get();
+  zpd_uav_to_copy_dest.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  zpd_uav_to_copy_dest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+  deferred_command_list_.D3DResourceBarrier(1, &zpd_uav_to_copy_dest);
+  deferred_command_list_.D3DCopyBufferRegion(
+      zpd_rov_counter_buffer_.Get(), sizeof(uint32_t) * counter_index,
+      zpd_rov_counter_clear_buffer_.Get(), sizeof(uint32_t) * counter_index, sizeof(uint32_t));
+  D3D12_RESOURCE_BARRIER zpd_copy_dest_to_uav = {};
+  zpd_copy_dest_to_uav.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  zpd_copy_dest_to_uav.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+  zpd_copy_dest_to_uav.Transition.pResource = zpd_rov_counter_buffer_.Get();
+  zpd_copy_dest_to_uav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+  zpd_copy_dest_to_uav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  deferred_command_list_.D3DResourceBarrier(1, &zpd_copy_dest_to_uav);
+
+  if (!EndSubmission(false)) {
+    zpd_rov_counter_index_ = UINT32_MAX;
+    return false;
+  }
+
+  return true;
+}
+
+bool D3D12CommandProcessor::EndZpdRovCounterSegment(
+    uint32_t sample_count_address, xenos::xe_gpu_depth_sample_counts* sample_counts) {
+  if (!zpd_rov_counter_resources_available_ || !zpd_rov_counter_buffer_ ||
+      !zpd_rov_counter_readback_ || zpd_rov_counter_index_ == UINT32_MAX) {
+    return false;
+  }
+
+  uint32_t counter_index = zpd_rov_counter_index_;
+  zpd_rov_counter_index_ = UINT32_MAX;
+
+  if (!BeginSubmission(true)) {
+    return false;
+  }
+
+  // Transition UAV -> COPY_SOURCE for readback.
+  D3D12_RESOURCE_BARRIER zpd_uav_to_copy_source = {};
+  zpd_uav_to_copy_source.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  zpd_uav_to_copy_source.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+  zpd_uav_to_copy_source.Transition.pResource = zpd_rov_counter_buffer_.Get();
+  zpd_uav_to_copy_source.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  zpd_uav_to_copy_source.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  deferred_command_list_.D3DResourceBarrier(1, &zpd_uav_to_copy_source);
+  deferred_command_list_.D3DCopyBufferRegion(
+      zpd_rov_counter_readback_.Get(), sizeof(uint32_t) * counter_index,
+      zpd_rov_counter_buffer_.Get(), sizeof(uint32_t) * counter_index, sizeof(uint32_t));
+  D3D12_RESOURCE_BARRIER zpd_copy_source_to_uav = {};
+  zpd_copy_source_to_uav.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+  zpd_copy_source_to_uav.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+  zpd_copy_source_to_uav.Transition.pResource = zpd_rov_counter_buffer_.Get();
+  zpd_copy_source_to_uav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+  zpd_copy_source_to_uav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+  deferred_command_list_.D3DResourceBarrier(1, &zpd_copy_source_to_uav);
+
+  if (!EndSubmission(false)) {
+    return false;
+  }
+
+  uint64_t query_submission = submission_current_ ? submission_current_ - 1 : 0;
+  CheckSubmissionFence(query_submission);
+  if (submission_completed_ < query_submission) {
+    return false;
+  }
+  if (!zpd_rov_counter_readback_mapping_) {
+    return false;
+  }
+
+  uint32_t samples = zpd_rov_counter_readback_mapping_[counter_index];
+  uint32_t clamped = samples > uint64_t(UINT32_MAX) ? UINT32_MAX : samples;
+  sample_counts->Total_A = clamped;
+  sample_counts->Total_B = 0;
+  sample_counts->ZPass_A = clamped;
+  sample_counts->ZPass_B = 0;
+  sample_counts->ZFail_A = 0;
+  sample_counts->ZFail_B = 0;
+  sample_counts->StencilFail_A = 0;
+  sample_counts->StencilFail_B = 0;
+  return true;
 }
 
 void D3D12CommandProcessor::WriteGammaRampSRV(bool is_pwl,

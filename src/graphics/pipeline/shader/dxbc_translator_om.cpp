@@ -1563,6 +1563,128 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToRTVs() {
       }
       a_.OpEndIf();
     }
+    // For RT0 with MIN/MAX blend op, pre-multiply by the source blend factor
+    // (since D3D12 MIN/MAX ignores blend factors, but Xbox 360 applies them).
+    if (i == 0 && !edram_rov_used_) {
+      xenos::BlendFactor rgb_factor_for_premult =
+          GetDxbcShaderModification().pixel.rt0_blend_rgb_factor_for_premult;
+      xenos::BlendFactor a_factor_for_premult =
+          GetDxbcShaderModification().pixel.rt0_blend_a_factor_for_premult;
+      bool premult_rgb = rgb_factor_for_premult != xenos::BlendFactor::kOne;
+      bool premult_a = a_factor_for_premult != xenos::BlendFactor::kOne;
+      if (premult_rgb || premult_a) {
+        uint32_t premult_temp = PushSystemTemp();
+        if (premult_rgb) {
+          switch (rgb_factor_for_premult) {
+            case xenos::BlendFactor::kZero:
+              a_.OpMov(dxbc::Dest::R(system_temp_color, 0b0111), dxbc::Src::LF(0.0f));
+              break;
+            case xenos::BlendFactor::kSrcColor:
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       dxbc::Src::R(system_temp_color));
+              break;
+            case xenos::BlendFactor::kOneMinusSrcColor:
+              a_.OpAdd(dxbc::Dest::R(premult_temp, 0b0111), dxbc::Src::LF(1.0f),
+                       -dxbc::Src::R(system_temp_color));
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       dxbc::Src::R(premult_temp));
+              break;
+            case xenos::BlendFactor::kSrcAlpha:
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW));
+              break;
+            case xenos::BlendFactor::kOneMinusSrcAlpha:
+              a_.OpAdd(dxbc::Dest::R(premult_temp, 0b0001), dxbc::Src::LF(1.0f),
+                       -dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW));
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       dxbc::Src::R(premult_temp, dxbc::Src::kXXXX));
+              break;
+            case xenos::BlendFactor::kConstantColor:
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       LoadSystemConstant(SystemConstants::Index::kEdramBlendConstant,
+                                          offsetof(SystemConstants, edram_blend_constant),
+                                          dxbc::Src::kXYZW));
+              break;
+            case xenos::BlendFactor::kOneMinusConstantColor:
+              a_.OpAdd(dxbc::Dest::R(premult_temp, 0b0111), dxbc::Src::LF(1.0f),
+                       -LoadSystemConstant(SystemConstants::Index::kEdramBlendConstant,
+                                           offsetof(SystemConstants, edram_blend_constant),
+                                           dxbc::Src::kXYZW));
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       dxbc::Src::R(premult_temp));
+              break;
+            case xenos::BlendFactor::kConstantAlpha:
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       LoadSystemConstant(SystemConstants::Index::kEdramBlendConstant,
+                                          offsetof(SystemConstants, edram_blend_constant),
+                                          dxbc::Src::kWWWW));
+              break;
+            case xenos::BlendFactor::kOneMinusConstantAlpha:
+              a_.OpAdd(dxbc::Dest::R(premult_temp, 0b0001), dxbc::Src::LF(1.0f),
+                       -LoadSystemConstant(SystemConstants::Index::kEdramBlendConstant,
+                                           offsetof(SystemConstants, edram_blend_constant),
+                                           dxbc::Src::kWWWW));
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b0111),
+                       dxbc::Src::R(system_temp_color),
+                       dxbc::Src::R(premult_temp, dxbc::Src::kXXXX));
+              break;
+            default:
+              break;
+          }
+        }
+        if (premult_a) {
+          switch (a_factor_for_premult) {
+            case xenos::BlendFactor::kZero:
+              a_.OpMov(dxbc::Dest::R(system_temp_color, 0b1000), dxbc::Src::LF(0.0f));
+              break;
+            case xenos::BlendFactor::kSrcColor:
+            case xenos::BlendFactor::kSrcAlpha:
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b1000),
+                       dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW),
+                       dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW));
+              break;
+            case xenos::BlendFactor::kOneMinusSrcColor:
+            case xenos::BlendFactor::kOneMinusSrcAlpha:
+              a_.OpAdd(dxbc::Dest::R(premult_temp, 0b0001), dxbc::Src::LF(1.0f),
+                       -dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW));
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b1000),
+                       dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW),
+                       dxbc::Src::R(premult_temp, dxbc::Src::kXXXX));
+              break;
+            case xenos::BlendFactor::kConstantColor:
+            case xenos::BlendFactor::kConstantAlpha:
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b1000),
+                       dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW),
+                       LoadSystemConstant(SystemConstants::Index::kEdramBlendConstant,
+                                          offsetof(SystemConstants, edram_blend_constant),
+                                          dxbc::Src::kWWWW));
+              break;
+            case xenos::BlendFactor::kOneMinusConstantColor:
+            case xenos::BlendFactor::kOneMinusConstantAlpha:
+              a_.OpAdd(dxbc::Dest::R(premult_temp, 0b0001), dxbc::Src::LF(1.0f),
+                       -LoadSystemConstant(SystemConstants::Index::kEdramBlendConstant,
+                                           offsetof(SystemConstants, edram_blend_constant),
+                                           dxbc::Src::kWWWW));
+              a_.OpMul(dxbc::Dest::R(system_temp_color, 0b1000),
+                       dxbc::Src::R(system_temp_color, dxbc::Src::kWWWW),
+                       dxbc::Src::R(premult_temp, dxbc::Src::kXXXX));
+              break;
+            case xenos::BlendFactor::kSrcAlphaSaturate:
+              break;
+            default:
+              break;
+          }
+        }
+        PopSystemTemp();
+      }
+    }
     // Copy the color from a readable temp register to an output register.
     a_.OpMov(dxbc::Dest::O(i), dxbc::Src::R(system_temp_color));
   }
@@ -1817,6 +1939,43 @@ void DxbcShaderTranslator::CompletePixelShader_AlphaToMask() {
   a_.OpEndIf();
 }
 
+void DxbcShaderTranslator::ROV_AddPassedMSAASamplesToZPD() {
+  if (uav_index_zpd_rov_counter_ == kBindingIndexUnallocated) {
+    uav_index_zpd_rov_counter_ = uav_count_++;
+  }
+
+  uint32_t temp = PushSystemTemp();
+  dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
+  dxbc::Src temp_x_src(dxbc::Src::R(temp, dxbc::Src::kXXXX));
+  dxbc::Dest temp_y_dest(dxbc::Dest::R(temp, 0b0010));
+  dxbc::Src temp_y_src(dxbc::Src::R(temp, dxbc::Src::kYYYY));
+
+  dxbc::Src counter_index_src(LoadSystemConstant(
+      SystemConstants::Index::kZpdRovCounterIndex,
+      offsetof(SystemConstants, zpd_rov_counter_index), dxbc::Src::kXXXX));
+
+  a_.OpINE(temp_x_dest, counter_index_src, dxbc::Src::LU(UINT32_MAX));
+  a_.OpIf(true, temp_x_src);
+
+  {
+    a_.OpAnd(temp_x_dest, dxbc::Src::R(system_temp_rov_params_, dxbc::Src::kXXXX),
+             dxbc::Src::LU((uint32_t(1) << 4) - 1));
+    a_.OpCountBits(temp_x_dest, temp_x_src);
+    a_.OpIf(true, temp_x_src);
+    {
+      a_.OpUMul(dxbc::Dest::Null(), temp_y_dest, counter_index_src,
+                dxbc::Src::LU(sizeof(uint32_t)));
+      a_.OpAtomicIAdd(dxbc::Dest::U(uav_index_zpd_rov_counter_,
+                                    uint32_t(UAVRegister::kZpdRovCounter), 0),
+                      temp_y_src, 0b0001, temp_x_src);
+    }
+    a_.OpEndIf();
+  }
+  a_.OpEndIf();
+
+  PopSystemTemp();
+}
+
 void DxbcShaderTranslator::CompletePixelShader_WriteToROV() {
   uint32_t temp = PushSystemTemp();
   dxbc::Dest temp_x_dest(dxbc::Dest::R(temp, 0b0001));
@@ -1868,6 +2027,8 @@ void DxbcShaderTranslator::CompletePixelShader_WriteToROV() {
 
   // system_temp_rov_params_.y (the depth / stencil sample address) is not
   // needed anymore, can be used for color writing.
+
+  ROV_AddPassedMSAASamplesToZPD();
 
   if (!is_depth_only_pixel_shader_) {
     // Check if any sample is still covered after depth testing and writing,

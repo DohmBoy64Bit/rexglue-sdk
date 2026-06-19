@@ -1430,6 +1430,7 @@ enum class Opcode : uint32_t {
   kIBFE = 139,
   kBFI = 140,
   kBFRev = 141,
+  kCountBits = 176,
   kDclStream = 143,
   kDclInputControlPointCount = 147,
   kDclTessDomain = 149,
@@ -1443,6 +1444,7 @@ enum class Opcode : uint32_t {
   kStoreRaw = 166,
   kAtomicAnd = 169,
   kAtomicOr = 170,
+  kAtomicIAdd = 197,
   kEvalSampleIndex = 204,
   kEvalCentroid = 205,
 };
@@ -2125,6 +2127,10 @@ class Assembler {
     EmitAluOp(Opcode::kFirstBitLo, 0b1, dest, src);
     ++stat_.uint_instruction_count;
   }
+  void OpCountBits(const Dest& dest, const Src& src) {
+    EmitAluOp(Opcode::kCountBits, 0b1, dest, src);
+    ++stat_.uint_instruction_count;
+  }
   void OpUBFE(const Dest& dest, const Src& width, const Src& offset, const Src& src) {
     EmitAluOp(Opcode::kUBFE, 0b111, dest, width, offset, src);
     ++stat_.uint_instruction_count;
@@ -2267,6 +2273,10 @@ class Assembler {
   void OpAtomicOr(const Dest& dest, const Src& address, uint32_t address_components,
                   const Src& value) {
     EmitAtomicOp(Opcode::kAtomicOr, dest, address, address_components, value);
+  }
+  void OpAtomicIAdd(const Dest& dest, const Src& address, uint32_t address_components,
+                    const Src& value) {
+    EmitAtomicOp(Opcode::kAtomicIAdd, dest, address, address_components, value);
   }
   void OpEvalSampleIndex(const Dest& dest, const Src& value, const Src& sample_index) {
     uint32_t dest_write_mask = dest.GetMask();

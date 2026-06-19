@@ -20,7 +20,7 @@ set(REXGLUE_INSTALL_TARGETS
 
 if(REXGLUE_USE_VULKAN)
     list(APPEND REXGLUE_INSTALL_TARGETS
-        SPIRV glslang MachineIndependent GenericCodeGen OSDependent OGLCompiler  # glslang
+        SPIRV glslang MachineIndependent GenericCodeGen OSDependent  # glslang
         SPIRV-Tools-static
     )
 endif()

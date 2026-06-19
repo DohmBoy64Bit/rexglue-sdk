@@ -51,6 +51,9 @@ enum class PrimitiveType : uint32_t {
   kTriangleStrip = 0x06,
   kTriangleWithWFlags = 0x07,
   kRectangleList = 0x08,
+  kUnused1 = 0x09,
+  kUnused2 = 0x0A,
+  kUnused3 = 0x0B,
   kLineLoop = 0x0C,
   kQuadList = 0x0D,
   kQuadStrip = 0x0E,
@@ -1636,6 +1639,9 @@ constexpr inline uint32_t MakePacketType2() {
   // tt?????? ???????? ???????? ????????
   return (2u << 30);
 }
+
+const char* GetEndianEnglishDescription(xenos::Endian endian);
+const char* GetPrimitiveTypeEnglishDescription(xenos::PrimitiveType prim_type);
 
 inline uint32_t MakePacketType3(Type3Opcode opcode, uint16_t count, bool predicate = false) {
   // ttcccccc cccccccc ?ooooooo ???????p

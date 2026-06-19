@@ -108,6 +108,7 @@ add_compile_options(
     $<$<CONFIG:RELEASE>:-O3>
     $<$<CONFIG:RELEASE>:-DNDEBUG>
     -fno-char8_t
+    -mssse3
 )
 
 # Platform detection (supports AMD64 and ARM64)

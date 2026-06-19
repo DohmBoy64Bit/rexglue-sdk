@@ -42,21 +42,21 @@ spv::Id SpirvBuilder::createQuadOp(spv::Op op_code, spv::Id type_id, spv::Id ope
 spv::Id SpirvBuilder::createNoContractionUnaryOp(spv::Op op_code, spv::Id type_id,
                                                  spv::Id operand) {
   spv::Id result = createUnaryOp(op_code, type_id, operand);
-  addDecoration(result, spv::DecorationNoContraction);
+  addDecoration(result, spv::Decoration::NoContraction);
   return result;
 }
 
 spv::Id SpirvBuilder::createNoContractionBinOp(spv::Op op_code, spv::Id type_id, spv::Id operand1,
                                                spv::Id operand2) {
   spv::Id result = createBinOp(op_code, type_id, operand1, operand2);
-  addDecoration(result, spv::DecorationNoContraction);
+  addDecoration(result, spv::Decoration::NoContraction);
   return result;
 }
 
 spv::Id SpirvBuilder::createUnaryBuiltinCall(spv::Id result_type, spv::Id builtins, int entry_point,
                                              spv::Id operand) {
   std::unique_ptr<spv::Instruction> instruction =
-      std::make_unique<spv::Instruction>(getUniqueId(), result_type, spv::OpExtInst);
+      std::make_unique<spv::Instruction>(getUniqueId(), result_type, spv::Op::OpExtInst);
   instruction->addIdOperand(builtins);
   instruction->addImmediateOperand(entry_point);
   instruction->addIdOperand(operand);
@@ -68,7 +68,7 @@ spv::Id SpirvBuilder::createUnaryBuiltinCall(spv::Id result_type, spv::Id builti
 spv::Id SpirvBuilder::createBinBuiltinCall(spv::Id result_type, spv::Id builtins, int entry_point,
                                            spv::Id operand1, spv::Id operand2) {
   std::unique_ptr<spv::Instruction> instruction =
-      std::make_unique<spv::Instruction>(getUniqueId(), result_type, spv::OpExtInst);
+      std::make_unique<spv::Instruction>(getUniqueId(), result_type, spv::Op::OpExtInst);
   instruction->addIdOperand(builtins);
   instruction->addImmediateOperand(entry_point);
   instruction->addIdOperand(operand1);
@@ -81,7 +81,7 @@ spv::Id SpirvBuilder::createBinBuiltinCall(spv::Id result_type, spv::Id builtins
 spv::Id SpirvBuilder::createTriBuiltinCall(spv::Id result_type, spv::Id builtins, int entry_point,
                                            spv::Id operand1, spv::Id operand2, spv::Id operand3) {
   std::unique_ptr<spv::Instruction> instruction =
-      std::make_unique<spv::Instruction>(getUniqueId(), result_type, spv::OpExtInst);
+      std::make_unique<spv::Instruction>(getUniqueId(), result_type, spv::Op::OpExtInst);
   instruction->addIdOperand(builtins);
   instruction->addImmediateOperand(entry_point);
   instruction->addIdOperand(operand1);
@@ -92,8 +92,8 @@ spv::Id SpirvBuilder::createTriBuiltinCall(spv::Id result_type, spv::Id builtins
   return result;
 }
 
-SpirvBuilder::IfBuilder::IfBuilder(spv::Id condition, unsigned int control, SpirvBuilder& builder,
-                                   unsigned int thenWeight, unsigned int elseWeight)
+SpirvBuilder::IfBuilder::IfBuilder(spv::Id condition, spv::SelectionControlMask control, SpirvBuilder& builder,
+                                    unsigned int thenWeight, unsigned int elseWeight)
     : builder(builder),
       condition(condition),
       control(control),
@@ -127,7 +127,7 @@ void SpirvBuilder::IfBuilder::makeBeginElse(bool branchToMerge) {
   if (branchToMerge) {
     // Close out the "then" by having it jump to the mergeBlock.
     thenPhiParent = builder.getBuildPoint()->getId();
-    builder.createBranch(mergeBlock);
+    builder.createBranch(false, mergeBlock);
   }
 
   // Make the first else block and add it to the function.
@@ -150,7 +150,7 @@ void SpirvBuilder::IfBuilder::makeEndIf(bool branchToMerge) {
   if (branchToMerge) {
     // Jump to the merge block.
     (elseBlock ? elsePhiParent : thenPhiParent) = builder.getBuildPoint()->getId();
-    builder.createBranch(mergeBlock);
+    builder.createBranch(false, mergeBlock);
   }
 
   // Go back to the headerBlock and make the flow control split.
@@ -159,7 +159,7 @@ void SpirvBuilder::IfBuilder::makeEndIf(bool branchToMerge) {
   {
     spv::Block* falseBlock = elseBlock ? elseBlock : mergeBlock;
     std::unique_ptr<spv::Instruction> branch =
-        std::make_unique<spv::Instruction>(spv::OpBranchConditional);
+        std::make_unique<spv::Instruction>(spv::Op::OpBranchConditional);
     branch->addIdOperand(condition);
     branch->addIdOperand(thenBlock->getId());
     branch->addIdOperand(falseBlock->getId());
@@ -184,11 +184,11 @@ void SpirvBuilder::IfBuilder::makeEndIf(bool branchToMerge) {
 spv::Id SpirvBuilder::IfBuilder::createMergePhi(spv::Id then_variable,
                                                 spv::Id else_variable) const {
   assert_true(builder.getBuildPoint() == mergeBlock);
-  return builder.createQuadOp(spv::OpPhi, builder.getTypeId(then_variable), then_variable,
+  return builder.createQuadOp(spv::Op::OpPhi, builder.getTypeId(then_variable), then_variable,
                               getThenPhiParent(), else_variable, getElsePhiParent());
 }
 
-SpirvBuilder::SwitchBuilder::SwitchBuilder(spv::Id selector, unsigned int selection_control,
+SpirvBuilder::SwitchBuilder::SwitchBuilder(spv::Id selector, spv::SelectionControlMask selection_control,
                                            SpirvBuilder& builder)
     : builder_(builder),
       selector_(selector),
@@ -238,7 +238,7 @@ void SpirvBuilder::SwitchBuilder::makeEndSwitch() {
   builder_.createSelectionMerge(merge_block_, selection_control_);
 
   std::unique_ptr<spv::Instruction> switch_instruction =
-      std::make_unique<spv::Instruction>(spv::OpSwitch);
+      std::make_unique<spv::Instruction>(spv::Op::OpSwitch);
   switch_instruction->addIdOperand(selector_);
   if (default_block_) {
     switch_instruction->addIdOperand(default_block_->getId());
@@ -267,7 +267,7 @@ void SpirvBuilder::SwitchBuilder::endSegment() {
   }
 
   if (!builder_.getBuildPoint()->isTerminated()) {
-    builder_.createBranch(merge_block_);
+    builder_.createBranch(false, merge_block_);
     if (current_branch_ == Branch::kDefault) {
       default_phi_parent_ = builder_.getBuildPoint()->getId();
     }

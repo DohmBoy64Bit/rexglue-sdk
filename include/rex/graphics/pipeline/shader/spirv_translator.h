@@ -33,7 +33,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // TODO(Triang3l): Change to 0xYYYYMMDD once it's out of the rapid
     // prototyping stage (easier to do small granular updates with an
     // incremental counter).
-    static constexpr uint32_t kVersion = 12;
+    static constexpr uint32_t kVersion = 13;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
@@ -78,16 +78,21 @@ class SpirvShaderTranslator : public ShaderTranslator {
       uint32_t interpolator_mask : xenos::kMaxInterpolators;
       uint32_t interpolators_centroid : xenos::kMaxInterpolators;
       // uint32_t 1.
-      // Dynamically indexable register count from SQ_PROGRAM_CNTL.
-      uint32_t dynamic_addressable_register_count : 8;
       uint32_t param_gen_enable : 1;
       uint32_t param_gen_interpolator : 4;
       // If param_gen_enable is set, this must be set for point primitives, and
       // must not be set for other primitive types - enables the point sprite
       // coordinates input, and also effects the flag bits in PsParamGen.
       uint32_t param_gen_point : 1;
+      // Dynamically indexable register count from SQ_PROGRAM_CNTL.
+      uint32_t dynamic_addressable_register_count : 8;
       // For host render targets - depth / stencil output mode.
-      DepthStencilMode depth_stencil_mode : 3;
+      DepthStencilMode depth_stencil_mode : 2;
+      // For RT0 with MIN/MAX blend op, pre-multiply the source color by the
+      // source blend factor (since Vulkan MIN/MAX ignores blend factors, but
+      // Xbox 360 applies them). kOne means no pre-multiplication.
+      xenos::BlendFactor rt0_blend_rgb_factor_for_premult : 5;
+      xenos::BlendFactor rt0_blend_a_factor_for_premult : 5;
     } pixel;
     uint64_t value = 0;
 
@@ -301,6 +306,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
 
     // The constant blend factor for the respective modes.
     float edram_blend_constant[4];
+
+    // ROV ZPD counter index (UINT32_MAX = outside active segment).
+    uint32_t zpd_rov_counter_index;
 
     // Tessellation helper shader constants.
     uint32_t vertex_index_min;
@@ -879,6 +887,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     kSystemConstantEdramRTKeepMask,
     kSystemConstantEdramRTClamp,
     kSystemConstantEdramBlendConstant,
+    kSystemConstantZpdRovCounterIndex,
   };
   spv::Id uniform_system_constants_;
   spv::Id uniform_float_constants_;
@@ -887,6 +896,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
 
   spv::Id buffers_shared_memory_;
   spv::Id buffer_edram_;
+  spv::Id buffer_zpd_counter_;
 
   // Not using combined images and samplers because
   // maxPerStageDescriptorSamplers is often lower than

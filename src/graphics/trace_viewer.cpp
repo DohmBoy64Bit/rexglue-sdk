@@ -357,6 +357,94 @@ void TraceViewer::DrawPacketDisassemblerUI() {
                   ImGui::Text("%.16" PRIX64, action.set_bin_select.value);
                   break;
                 }
+                case PacketAction::Type::kSetBinMaskLo:
+                case PacketAction::Type::kSetBinMaskHi:
+                case PacketAction::Type::kSetBinSelectLo:
+                case PacketAction::Type::kSetBinSelectHi: {
+                  ImGui::Text("%.8X", action.lohi_op.value);
+                  break;
+                }
+                case PacketAction::Type::kMeInit: {
+                  ImGui::Text("%zu words", action.words.size());
+                  break;
+                }
+                case PacketAction::Type::kGenInterrupt: {
+                  ImGui::Text("cpu_mask=%.8X", action.gen_interrupt.cpu_mask);
+                  break;
+                }
+                case PacketAction::Type::kWaitRegMem: {
+                  ImGui::Text("poll=%.8X ref=%.8X mask=%.8X wait=%.8X",
+                              action.wait_reg_mem.poll_reg_addr,
+                              action.wait_reg_mem.ref,
+                              action.wait_reg_mem.mask,
+                              action.wait_reg_mem.wait);
+                  break;
+                }
+                case PacketAction::Type::kRegRmw: {
+                  ImGui::Text("and=%.8X or=%.8X", action.reg_rmw.and_mask, action.reg_rmw.or_mask);
+                  break;
+                }
+                case PacketAction::Type::kCondWrite: {
+                  ImGui::Text("poll=%.8X ref=%.8X -> reg=%.8X val=%.8X",
+                              action.cond_write.poll_reg_addr,
+                              action.cond_write.ref,
+                              action.cond_write.write_reg_addr,
+                              action.cond_write.write_data);
+                  break;
+                }
+                case PacketAction::Type::kEventWrite: {
+                  ImGui::Text("initiator=%.8X", action.event_write.initiator);
+                  break;
+                }
+                case PacketAction::Type::kEventWriteSHD:
+                case PacketAction::Type::kEventWriteExt:
+                case PacketAction::Type::kEventWriteZPD: {
+                  ImGui::Text("initiator=%.8X", action.event_write_shd.initiator);
+                  break;
+                }
+                case PacketAction::Type::kDrawIndx:
+                case PacketAction::Type::kDrawIndx2: {
+                  ImGui::Text("count=%d prim=0x%X src_sel=%d",
+                              action.draw_indx.index_count,
+                              static_cast<uint32_t>(action.draw_indx.prim_type),
+                              action.draw_indx.src_sel);
+                  break;
+                }
+                case PacketAction::Type::kInvalidateState: {
+                  ImGui::Text("mask=%.8X", action.invalidate_state.state_mask);
+                  break;
+                }
+                case PacketAction::Type::kImLoad:
+                case PacketAction::Type::kImLoadImmediate: {
+                  ImGui::Text("shader=%d size=%d", 
+                              static_cast<uint32_t>(action.im_load.shader_type),
+                              action.im_load.size_dwords);
+                  break;
+                }
+                case PacketAction::Type::kContextUpdate:
+                case PacketAction::Type::kWaitForIdle: {
+                  break;
+                }
+                case PacketAction::Type::kVizQuery: {
+                  ImGui::Text("id=%d end=%d", action.vizquery.id, action.vizquery.end ? 1 : 0);
+                  break;
+                }
+                case PacketAction::Type::kMemWrite: {
+                  ImGui::Text("addr=%.8X %zu words", action.mem_write.addr, action.words.size());
+                  break;
+                }
+                case PacketAction::Type::kRegToMem: {
+                  ImGui::Text("reg=%.8X -> mem=%.8X", action.reg2mem.reg_addr, action.reg2mem.mem_addr);
+                  break;
+                }
+                case PacketAction::Type::kIndirBuffer: {
+                  ImGui::Text("ptr=%.8X len=%d", action.indir_buffer.list_ptr, action.indir_buffer.list_length);
+                  break;
+                }
+                case PacketAction::Type::kXeSwap: {
+                  ImGui::Text("frontbuf=%.8X", action.xe_swap.frontbuffer_ptr);
+                  break;
+                }
               }
             }
             ImGui::TreePop();

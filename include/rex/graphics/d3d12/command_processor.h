@@ -420,6 +420,13 @@ class D3D12CommandProcessor : public CommandProcessor {
   uint64_t NormalizeOcclusionSamples(uint64_t samples) const;
   void WriteGuestOcclusionResult(xenos::xe_gpu_depth_sample_counts* sample_counts,
                                  uint64_t samples);
+
+  bool InitializeZpdRovCounterResources();
+  void ShutdownZpdRovCounterResources();
+  uint32_t AcquireZpdCounterIndex();
+  bool BeginZpdRovCounterSegment(uint32_t sample_count_address);
+  bool EndZpdRovCounterSegment(uint32_t sample_count_address,
+                               xenos::xe_gpu_depth_sample_counts* sample_counts);
   void InvalidateAllVertexBufferResidency();
   void InvalidateVertexBufferResidency(uint32_t vfetch_index);
   void InvalidateVertexBufferResidencyRange(uint32_t first_vfetch, uint32_t last_vfetch);
@@ -667,6 +674,15 @@ class D3D12CommandProcessor : public CommandProcessor {
     uint32_t host_index = UINT32_MAX;
     bool valid = false;
   } active_occlusion_query_;
+
+  static constexpr uint32_t kMaxZpdCounters = 64;
+  Microsoft::WRL::ComPtr<ID3D12Resource> zpd_rov_counter_buffer_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> zpd_rov_counter_clear_buffer_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> zpd_rov_counter_readback_;
+  uint32_t* zpd_rov_counter_readback_mapping_ = nullptr;
+  uint32_t zpd_rov_counter_cursor_ = 0;
+  uint32_t zpd_rov_counter_index_ = UINT32_MAX;
+  bool zpd_rov_counter_resources_available_ = false;
   struct VertexBufferState {
     uint32_t address = UINT32_MAX;
     uint32_t size = UINT32_MAX;
