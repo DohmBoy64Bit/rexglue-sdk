@@ -1,97 +1,132 @@
-# Building ReXGlue from Source
+# Building Against rexglue-canary
+
+This guide covers building a ReXGlue port project using the `rexglue-canary` SDK (this repo).
 
 ## Prerequisites
 
-- **Visual Studio 2022** (Community or higher) with C++ Desktop workload
-- **CMake** 3.25+ (included with VS, or standalone)
-- **Ninja** (included with VS, or standalone)
-- **Git for Windows** (for submodules)
+- **Visual Studio 2022** with C++ Desktop workload
+- **CMake** 3.25+
+- **Ninja** (bundled with VS)
+- **Git for Windows**
 
-## 1. Clone and set up
+## 1. Build rexglue-canary
 
-```powershell
-git clone --recurse-submodules https://github.com/rexglue/rexglue-sdk.git
-cd rexglue-sdk
-```
-
-## 2. Build the SDK
-
-Open **Developer PowerShell for VS 2022** (or run `VsDevCmd.bat` first), then:
+Open **Developer PowerShell for VS 2022** (or run `VsDevCmd.bat -arch=x64` first), then:
 
 ```powershell
+cd E:\rexglue-canary
+
+# Configure (D3D12-only)
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 
+# Build
 cmake --build build --config Debug -j8
 ```
 
-### Windows symlink workaround
+### Symlink workaround (mspack)
 
-Some third-party libraries (mspack) use symlinks that break on Windows. If you see `expected identifier or '('` errors in `cabextract/mspack/*.c` files, copy the real sources:
+Some third-party libraries ship redirect files instead of symlinks. If `cabextract/mspack/*.c` files fail to compile:
 
 ```powershell
-$real = "thirdparty/libmspack/libmspack/mspack"
-$link = "thirdparty/libmspack/cabextract/mspack"
+cd E:\rexglue-canary
+$r = "thirdparty/libmspack/libmspack/mspack"
+$l = "thirdparty/libmspack/cabextract/mspack"
 @("lzxd.c","cabd.c","mszipd.c","qtmd.c","system.c",
-  "cab.h","lzx.h","macros.h","mspack.h","mszip.h","qtm.h","readbits.h","readhuff.h","system.h") | ForEach-Object {
-    Copy-Item "$real/$_" "$link/$_" -Force
+  "cab.h","lzx.h","macros.h","mspack.h","mszip.h",
+  "qtm.h","readbits.h","readhuff.h","system.h") | ForEach-Object {
+    Copy-Item "$r/$_" "$l/$_" -Force
 }
 ```
 
-Then rebuild.
+### Pre-existing kernel fix
 
-## 3. Install the SDK
+One kernel file has a C++20 `char8_t` issue. If `xboxkrnl_ob.cpp` fails:
+
+```cpp
+// change:   u8"\\??\\"
+//    to:    "\\??\\"
+```
+
+The string is pure ASCII so dropping the `u8` prefix is safe.
+
+## 2. Install the SDK
 
 ```powershell
+cd E:\rexglue-canary
 cmake --install build --config Debug --prefix out/install
 ```
 
-This places headers, libs, and CMake config under `out/install/`.
+Output goes to `E:\rexglue-canary\out\install\`. CMake also registers the SDK in your user package registry.
 
-## 4. Build a port project against the SDK
-
-Use `CMAKE_PREFIX_PATH` to point the port project at your installed SDK:
+## 3. Configure a port project
 
 ```powershell
-cd D:\path\to\your-port
+cd D:\360RexGlue\TheOutFit\TheOutFit_Port
 
 cmake -B out/build/win-amd64-debug -G Ninja `
     -DCMAKE_BUILD_TYPE=Debug `
     -DCMAKE_C_COMPILER=clang-cl `
     -DCMAKE_CXX_COMPILER=clang-cl `
-    -DCMAKE_PREFIX_PATH=E:/path/to/rexglue-sdk/out/install
-
-cmake --build out/build/win-amd64-debug --config Debug -j8
+    -DCMAKE_PREFIX_PATH=E:/rexglue-canary/out/install
 ```
 
-The port's `generated/rexglue.cmake` will auto-detect the SDK via `find_package(rexglue)`.
+The port's `generated/rexglue.cmake` finds the SDK via `find_package(rexglue)`. You should see:
 
-### Alternative: source-tree SDK
+```
+Found ReXGlue SDK 0.8.1.x at E:/rexglue-canary/out/install/lib/cmake/rexglue
+```
 
-If you prefer building the SDK alongside the port (e.g., if you're modifying SDK code), pass `-DREXSDK_DIR=E:/path/to/rexglue-sdk` instead of `-DCMAKE_PREFIX_PATH`. This adds the SDK as a CMake subdirectory. Note: you may need to add extra include paths (imgui, build/include) to the port's CMakeLists.txt in this mode.
+### Option B: source-tree SDK (for SDK hacking)
+
+If you're iterating on SDK code and the port simultaneously, build from the source tree instead of the install:
+
+```powershell
+cmake -B out/build/win-amd64-debug -G Ninja `
+    -DCMAKE_BUILD_TYPE=Debug `
+    -DCMAKE_C_COMPILER=clang-cl `
+    -DCMAKE_CXX_COMPILER=clang-cl `
+    -DREXSDK_DIR=E:/rexglue-canary
+```
+
+This adds the SDK as a CMake subdirectory. Downside: you may need to patch the port's CMakeLists.txt with extra include paths.
+
+## 4. Build the port
+
+```powershell
+cd D:\360RexGlue\TheOutFit\TheOutFit_Port
+cmake --build out/build/win-amd64-debug --config Debug -j8
+```
 
 ## 5. Output
 
-The port build produces:
-
 ```
 out/build/win-amd64-debug/
-  yourport.exe        # host executable
-  rexruntimed.dll     # SDK runtime (auto-staged)
-  TracyClientd.dll    # profiler (auto-staged)
+  theoutfit.exe        ~75 MB   # host executable
+  rexruntimed.dll      ~24 MB   # SDK runtime (auto-staged)
+  TracyClientd.dll     ~0.6 MB  # profiler (auto-staged)
 ```
 
-## Quick rebuild (no reconfigure)
+Place your game assets in `assets\game_files\` (relative to the exe, or per your port's README).
+
+## Quick rebuild
 
 ```powershell
+# Port only (no reconfigure needed)
 cmake --build out/build/win-amd64-debug --config Debug -j8
+
+# SDK only
+cmake --build E:/rexglue-canary/build --config Debug -j8 --target rexgraphics
 ```
 
-## Common issues
+## Vulkan variant
 
-| Symptom | Fix |
-|---------|-----|
-| `'imgui.h' file not found` | Missing imgui include. Use installed SDK via `CMAKE_PREFIX_PATH`. |
-| `'rex/version.h' file not found` | Missing build/include. Same - use installed SDK. |
-| mspack `expected identifier or '('` | Symlink redirect issue. Run the workaround above. |
-| `char8_t` conversion errors | Pre-existing. Known in `xboxkrnl_ob.cpp`. Drop the `u8` prefix on ASCII-only strings. |
-| `clang is not a full path` | Set `CMAKE_C_COMPILER=clang-cl` and `CMAKE_CXX_COMPILER=clang-cl`. |
+To enable the Vulkan backend:
+
+```powershell
+cd E:\rexglue-canary
+cmake -B build -G Ninja -DREXGLUE_USE_VULKAN=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+cmake --build build --config Debug -j8
+cmake --install build --config Debug --prefix out/install
+```
+
+Then reconfigure the port with the same `CMAKE_PREFIX_PATH`.
