@@ -40,12 +40,12 @@ cd E:\rexglue-canary
 
 # Configure
 cmake -B build -G Ninja `
-    -DCMAKE_BUILD_TYPE=Debug `
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo `
     -DCMAKE_C_COMPILER=clang-cl `
     -DCMAKE_CXX_COMPILER=clang-cl
 
 # Build
-cmake --build build --config Debug -j8
+cmake --build build --config RelWithDebInfo -j8
 ```
 
 ### D3D12 + Vulkan (full graphics support)
@@ -56,12 +56,12 @@ cd E:\rexglue-canary
 # Configure
 cmake -B build -G Ninja `
     -DREXGLUE_USE_VULKAN=ON `
-    -DCMAKE_BUILD_TYPE=Debug `
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo `
     -DCMAKE_C_COMPILER=clang-cl `
     -DCMAKE_CXX_COMPILER=clang-cl
 
 # Build (--target rexgraphics rexruntime rexglue to skip spirv-tools)
-cmake --build build --config Debug -j8 --target rexgraphics rexruntime rexglue
+cmake --build build --config RelWithDebInfo -j8 --target rexgraphics rexruntime rexglue
 ```
 
 > **Note:** The Vulkan build may show `spirv-tools` `-Werror` warnings treated as errors.
@@ -105,7 +105,7 @@ Get-ChildItem out/win-amd64 -Include *.exe,*.dll | Select-Object Name,Length
 ## 3. Install the SDK
 
 ```powershell
-cmake --install build --config Debug --prefix out/install
+cmake --install build --config RelWithDebInfo --prefix out/install
 ```
 
 This places everything under `out/install/`:
@@ -138,8 +138,8 @@ Place your game files in `D:\360RexGlue\TheOutFit\assets\game_files\` (not inclu
 ```powershell
 cd D:\360RexGlue\TheOutFit\TheOutFit_Port
 
-cmake -B out/build/win-amd64-debug -G Ninja `
-    -DCMAKE_BUILD_TYPE=Debug `
+cmake -B out/build/win-amd64-RelWithDebInfo -G Ninja `
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo `
     -DCMAKE_C_COMPILER=clang-cl `
     -DCMAKE_CXX_COMPILER=clang-cl `
     -DCMAKE_PREFIX_PATH=E:/rexglue-canary/out/install
@@ -154,13 +154,13 @@ Found ReXGlue SDK 0.8.1.x at E:/rexglue-canary/out/install/lib/cmake/rexglue
 ### Build
 
 ```powershell
-cmake --build out/build/win-amd64-debug --config Debug -j8
+cmake --build out/build/win-amd64-RelWithDebInfo --config RelWithDebInfo -j8
 ```
 
 ### Output
 
 ```
-out/build/win-amd64-debug/
+out/build/win-amd64-RelWithDebInfo/
   theoutfit.exe        ~75 MB   # Host executable
   rexruntimed.dll      ~24 MB   # SDK runtime (auto-staged)
   TracyClientd.dll     ~1 MB    # Profiler (auto-staged)
@@ -169,7 +169,7 @@ out/build/win-amd64-debug/
 ### Run
 
 ```powershell
-.\out\build\win-amd64-debug\theoutfit.exe
+.\out\build\win-amd64-RelWithDebInfo\theoutfit.exe
 ```
 
 ## 5. Using a different port
@@ -179,13 +179,13 @@ handles SDK discovery automatically. You only need to point it at your SDK insta
 
 ```powershell
 cd path\to\your-port
-cmake -B out/build/win-amd64-debug -G Ninja `
-    -DCMAKE_BUILD_TYPE=Debug `
+cmake -B out/build/win-amd64-RelWithDebInfo -G Ninja `
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo `
     -DCMAKE_C_COMPILER=clang-cl `
     -DCMAKE_CXX_COMPILER=clang-cl `
     -DCMAKE_PREFIX_PATH=E:/rexglue-canary/out/install
 
-cmake --build out/build/win-amd64-debug --config Debug -j8
+cmake --build out/build/win-amd64-RelWithDebInfo --config RelWithDebInfo -j8
 ```
 
 ## 6. Rebuilding after SDK changes
@@ -194,15 +194,15 @@ cmake --build out/build/win-amd64-debug --config Debug -j8
 
 ```powershell
 cd E:\rexglue-canary
-cmake --build build --config Debug -j8
-cmake --install build --config Debug --prefix out/install
+cmake --build build --config RelWithDebInfo -j8
+cmake --install build --config RelWithDebInfo --prefix out/install
 ```
 
 ### Rebuild port only (no reconfigure needed)
 
 ```powershell
 cd D:\360RexGlue\TheOutFit\TheOutFit_Port
-cmake --build out/build/win-amd64-debug --config Debug -j8
+cmake --build out/build/win-amd64-RelWithDebInfo --config RelWithDebInfo -j8
 ```
 
 ### Full clean rebuild
@@ -211,15 +211,15 @@ cmake --build out/build/win-amd64-debug --config Debug -j8
 # SDK
 Remove-Item -Recurse -Force E:\rexglue-canary\build, E:\rexglue-canary\out -ErrorAction SilentlyContinue
 cd E:\rexglue-canary
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
-cmake --build build --config Debug -j8
-cmake --install build --config Debug --prefix out/install
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+cmake --build build --config RelWithDebInfo -j8
+cmake --install build --config RelWithDebInfo --prefix out/install
 
 # Port
 Remove-Item -Recurse -Force D:\360RexGlue\TheOutFit\TheOutFit_Port\out\build -ErrorAction SilentlyContinue
 cd D:\360RexGlue\TheOutFit\TheOutFit_Port
-cmake -B out/build/win-amd64-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_PREFIX_PATH=E:/rexglue-canary/out/install
-cmake --build out/build/win-amd64-debug --config Debug -j8
+cmake -B out/build/win-amd64-RelWithDebInfo -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_PREFIX_PATH=E:/rexglue-canary/out/install
+cmake --build out/build/win-amd64-RelWithDebInfo --config RelWithDebInfo -j8
 ```
 
 ## 7. Troubleshooting
