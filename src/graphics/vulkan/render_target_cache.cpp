@@ -2620,7 +2620,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
     case TransferOutput::kDepth:
       output_fragment_depth = builder.createVariable(spv::NoPrecision, spv::StorageClass::Output,
                                                      type_float, "gl_FragDepth");
-      builder.addDecoration(output_fragment_depth, spv::Decoration::BuiltIn, spv::BuiltIn::FragDepth);
+      builder.addDecoration(output_fragment_depth, spv::Decoration::BuiltIn, static_cast<int>(spv::BuiltIn::FragDepth));
       main_interface.push_back(output_fragment_depth);
       if (shader_uses_stencil_reference_output) {
         builder.addExtension("SPV_EXT_shader_stencil_export");
@@ -2628,7 +2628,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
         output_fragment_stencil_ref = builder.createVariable(
             spv::NoPrecision, spv::StorageClass::Output, type_int, "gl_FragStencilRefARB");
         builder.addDecoration(output_fragment_stencil_ref, spv::Decoration::BuiltIn,
-                              spv::BuiltIn::FragStencilRefEXT);
+                              static_cast<int>(spv::BuiltIn::FragStencilRefEXT));
         main_interface.push_back(output_fragment_stencil_ref);
       }
       break;
@@ -2786,7 +2786,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
   // Coordinate inputs.
   spv::Id input_fragment_coord =
       builder.createVariable(spv::NoPrecision, spv::StorageClass::Input, type_float4, "gl_FragCoord");
-  builder.addDecoration(input_fragment_coord, spv::Decoration::BuiltIn, spv::BuiltIn::FragCoord);
+  builder.addDecoration(input_fragment_coord, spv::Decoration::BuiltIn, static_cast<int>(spv::BuiltIn::FragCoord));
   main_interface.push_back(input_fragment_coord);
   spv::Id input_sample_id = spv::NoResult;
   spv::Id spec_const_sample_id = spv::NoResult;
@@ -2797,7 +2797,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
       input_sample_id =
           builder.createVariable(spv::NoPrecision, spv::StorageClass::Input, type_int, "gl_SampleID");
       builder.addDecoration(input_sample_id, spv::Decoration::Flat);
-      builder.addDecoration(input_sample_id, spv::Decoration::BuiltIn, spv::BuiltIn::SampleId);
+      builder.addDecoration(input_sample_id, spv::Decoration::BuiltIn, static_cast<int>(spv::BuiltIn::SampleId));
       main_interface.push_back(input_sample_id);
     } else {
       // One sample per draw, with different sample masks.
@@ -2812,7 +2812,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
   std::vector<std::vector<spv::Decoration>> main_precisions;
   spv::Block* main_entry;
   spv::Function* main_function = builder.makeFunctionEntry(
-      spv::NoPrecision, type_void, "main", main_param_types, main_precisions, &main_entry);
+      spv::NoPrecision, type_void, "main", spv::LinkageType::Export, main_param_types, main_precisions, &main_entry);
 
   // Working with unsigned numbers for simplicity now, bitcasting to signed will
   // be done at texture fetch.
@@ -4392,7 +4392,7 @@ VkShaderModule VulkanRenderTargetCache::GetTransferShader(TransferShaderKey key)
           if (host_depth32 != spv::NoResult) {
             assert_not_null(depth24_to_depth32_merge);
             spv::Id depth24_to_depth32_result_block_id = builder.getBuildPoint()->getId();
-            builder.createBranch(false, false, depth24_to_depth32_merge);
+            builder.createBranch(false, depth24_to_depth32_merge);
             builder.setBuildPoint(depth24_to_depth32_merge);
             id_vector_temp.clear();
             id_vector_temp.push_back(guest_depth32);
@@ -5705,14 +5705,14 @@ VkPipeline VulkanRenderTargetCache::GetDumpPipeline(DumpPipelineKey key) {
   spv::Id input_global_invocation_id = builder.createVariable(
       spv::NoPrecision, spv::StorageClass::Input, type_uint3, "gl_GlobalInvocationID");
   builder.addDecoration(input_global_invocation_id, spv::Decoration::BuiltIn,
-                        spv::BuiltIn::GlobalInvocationId);
+                        static_cast<int>(spv::BuiltIn::GlobalInvocationId));
 
   // Begin the main function.
   std::vector<spv::Id> main_param_types;
   std::vector<std::vector<spv::Decoration>> main_precisions;
   spv::Block* main_entry;
   spv::Function* main_function = builder.makeFunctionEntry(
-      spv::NoPrecision, type_void, "main", main_param_types, main_precisions, &main_entry);
+      spv::NoPrecision, type_void, "main", spv::LinkageType::Export, main_param_types, main_precisions, &main_entry);
 
   // For now, as the exact addressing in 64bpp render targets relatively to
   // 32bpp is unknown, treating 64bpp tiles as storing 40x16 samples rather than
