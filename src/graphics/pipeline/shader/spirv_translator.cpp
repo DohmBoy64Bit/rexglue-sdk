@@ -1106,7 +1106,7 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
   if (is_pixel_shader()) {
     execution_model = spv::ExecutionModel::Fragment;
     builder_->addExecutionMode(function_main_, spv::ExecutionMode::OriginUpperLeft);
-    if (output_fragment_depth_ != spv::NoResult) {
+    if (current_shader().writes_depth() && !edram_fragment_shader_interlock_) {
       builder_->addExecutionMode(function_main_, spv::ExecutionMode::DepthReplacing);
       if (!current_shader().writes_depth() &&
           GetSpirvShaderModification().pixel.depth_stencil_mode ==
@@ -2944,11 +2944,13 @@ void SpirvShaderTranslator::StartFragmentShaderBeforeMain() {
     }
     output_fragment_depth_ = spv::NoResult;
     output_fragment_sample_mask_ = spv::NoResult;
-    if (current_shader().writes_depth() || float24_depth_conversion) {
+    if (!edram_fragment_shader_interlock_ && !is_depth_only_fragment_shader_ &&
+        (current_shader().writes_depth() || float24_depth_conversion)) {
       output_fragment_depth_ = builder_->createVariable(spv::NoPrecision, spv::StorageClass::Output,
                                                         type_float_, "gl_FragDepth");
       builder_->addDecoration(output_fragment_depth_, spv::Decoration::BuiltIn,
                               static_cast<int>(spv::BuiltIn::FragDepth));
+      builder_->addDecoration(output_fragment_depth_, spv::Decoration::Invariant);
       main_interface_.push_back(output_fragment_depth_);
     }
     if (alpha_to_coverage_possible && features_.sample_rate_shading) {
@@ -2983,17 +2985,21 @@ void SpirvShaderTranslator::StartFragmentShaderInMain() {
     // to the execution mask GPUs naturally have.
   }
 
+  // Staging variable for guest oDepth writes.
+  // Created whenever the shader uses oDepth:
+  //   FSI reads it during its EDRAM depth write inside the interlock.
+  //   FBO copies it to gl_FragDepth at the end of the shader.
+  if (current_shader().writes_depth()) {
+    var_main_fragment_depth_ = builder_->createVariable(
+        spv::NoPrecision, spv::StorageClass::Function, type_float_,
+        "xe_var_fragment_depth", const_float_0_);
+  }
+
   if (edram_fragment_shader_interlock_) {
     // Initialize color output variables with fragment shader interlock.
     std::fill(output_or_var_fragment_data_.begin(), output_or_var_fragment_data_.end(),
               spv::NoResult);
-    var_main_fragment_depth_ = spv::NoResult;
     var_main_fsi_color_written_ = spv::NoResult;
-    if (current_shader().writes_depth()) {
-      var_main_fragment_depth_ =
-          builder_->createVariable(spv::NoPrecision, spv::StorageClass::Function, type_float_,
-                                   "xe_var_fragment_depth", const_float_0_);
-    }
     uint32_t color_targets_written = current_shader().writes_color_targets();
     if (color_targets_written) {
       static const char* const kFragmentDataVariableNames[] = {

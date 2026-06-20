@@ -81,6 +81,13 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
         index = builder_->createNoContractionBinOp(spv::Op::OpFAdd, type_float_, index,
                                                    builder_->makeFloatConstant(0.5f));
       }
+      // TODO: AC6 — wire ac6_ground_fix cvar.
+      // Accurate RCP implementation would be the proper fix.
+      // } else if (cvars::ac6_ground_fix) {
+      //   index = builder_->createNoContractionBinOp(
+      //       spv::Op::OpFAdd, type_float_, index,
+      //       builder_->makeFloatConstant(0.00025f));
+      // }
       index =
           builder_->createUnaryOp(spv::Op::OpConvertFToS, type_int_,
                                   builder_->createUnaryBuiltinCall(
