@@ -226,8 +226,8 @@ All headers under `include/rex/` are the **public-facing SDK API**. These must b
 | `dxc/` | 🔄 Import if needed | Only if D3D12 shader path needs Canary fixes |
 | `vulkan-headers/` | 🔄 Update | Update with shader/backend test pass |
 | `vulkan-memory-allocator/` | 🔄 Update | Update if Vulkan backend sync requires it |
-| `glslang/` | ⚠️ Compare | Compare version before update |
-| `spirv-tools/` | ⚠️ Compare | Compare version before update |
+| `glslang/` | ✅ Updated | Upgraded to 16.0.0 (matches Canary), compiles D3D12+Vulkan |
+| `spirv-tools/` | ✅ Done | Build fixed with `-w` suppression on all targets |
 | `fmt/`, `spdlog/` | ⚠️ Compare | Compare versions |
 | All others | ✅ Keep | Not directly upstream-dependent |
 
