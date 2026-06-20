@@ -62,3 +62,11 @@ These rules govern every change imported from Xenia Canary into ReXGlue:
 | 2026-06-19 | kernel build fix | `src/kernel/xboxkrnl/xboxkrnl_ob.cpp` | — | Removed `u8` prefix from ASCII-only `"\\??\\"` literal — resolves C++20 `char8_t` → `string_view` conversion error | ✅ Complete |
 | 2026-06-19 | Build verification | — | — | D3D12+Vulkan SDK compiles clean (RelWithDebInfo). The Outfit port builds and links against installed SDK. Spirv-tools -w suppression eliminates 100% of third-party warnings-as-errors. | ✅ Verified |
 | 2026-06-19 | documentation | `BUILDING.md` | — | Comprehensive build guide: SDK (D3D12+Vulkan), install, port project configuration, The Outfit example, troubleshooting | ✅ Complete |
+| 2026-06-19 | Gap: ZPD report header | `include/rex/graphics/xenos_zpd_report.h` | fbd620c22 | New header — record/slot constants, pending sentinel detection, sample count writeback, saturation curve, QueryBatch fake samples | ✅ Complete |
+| 2026-06-19 | Gap: Vulkan depth routing | `spirv_translator.cpp` | b15fcc73e | ExecutionModeDepthReplacing gated on !interlock; depth staging variable for ALL paths; gl_FragDepth output gated on !interlock && !depth_only | ✅ Complete |
+| 2026-06-19 | Gap: vertex fetch fix | `spirv_translator_fetch.cpp`, `dxbc_translator_fetch.cpp` | 02a259129 | Added TODO scaffold for ac6_ground_fix (needs cvar wiring to activate) | ⚠️ Scaffold only |
+| 2026-06-19 | Gap: clip/cull distance | `spirv_translator.cpp` | 562aa0dd9 | Already ported — ReXGlue uses separate clip/cull counts via `GetVertexClipDistanceCount()`/`GetVertexCullDistanceCount()` | ✅ No action |
+| 2026-06-19 | Gap: PM4 disasm crash | `packet_disassembler.cpp` | 9467c77f0 | Already fixed — `PacketAction di_action{};` zero-initialized at line 285 | ✅ No action |
+| 2026-06-19 | Gap: ZPD CVars | — | 73945c06d, 8a49c0380, 9c00ce936 | Skipped — requires ReXGlue cvar system wiring for occlusion_query_* cvars | ❌ Deferred |
+| 2026-06-19 | Gap: ZPD query pool | `d3d12_zpd_query_pool.*`, `vulkan_zpd_query_pool.*` | fbd620c22 | Skipped — major architectural refactor (~800 lines). ReXGlue has equivalent inline ZPD counter management in command_processor. | ❌ Deferred |
+| 2026-06-19 | Gap: Vulkan vertex buffer opt | `vulkan_command_processor.*` | c2674b19d | Skipped — backend-specific performance optimization, low priority | ❌ Deferred |
