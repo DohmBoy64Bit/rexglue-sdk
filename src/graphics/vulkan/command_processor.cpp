@@ -4430,25 +4430,375 @@ bool VulkanCommandProcessor::IssueCopy() {
   return IssueCopy_ReadbackResolvePath();
 }
 
-// ── Daytona native draw submission stubs ──────────────────────────────────────
-// Overrides return false to fall back to Xenos emulation path.
-// Future: implement Vulkan PSO creation, vertex decode, and draw submission.
+// ── Daytona native renderer ────────────────────────────────────────────────
+
+namespace {
+
+// ── GLSL shaders for Outfit native rendering ──────────────────────────────
+
+constexpr const char* kOutfitVertGlsl = R"(
+#version 450
+layout(location = 0) in vec3 in_pos;
+layout(location = 1) in vec4 in_color;
+layout(location = 2) in vec2 in_uv;
+
+layout(push_constant) uniform PC {
+    vec4 c72;
+    vec4 c73;
+    vec4 c74;
+    vec4 c75;
+    vec4 ndc_scale;
+    vec4 ndc_offset;
+} pc;
+
+layout(location = 0) out vec2 out_uv;
+layout(location = 1) out vec4 out_color;
+
+void main() {
+    vec4 pos = vec4(in_pos, 1.0);
+    vec4 r3 = pos.w * pc.c75.xwzy;
+    r3 = pos.z * pc.c74.xwzy + r3;
+    r3 = pos.y * pc.c73.xzyw + r3.xzwy;
+    vec4 guest_pos = pos.x * pc.c72 + r3.xzyw;
+    float w = guest_pos.w;
+    vec3 host = guest_pos.xyz * pc.ndc_scale.xyz + pc.ndc_offset.xyz * vec3(abs(w) < 0.000001 ? 1.0 : w);
+    gl_Position = vec4(host, guest_pos.w);
+    out_uv = in_uv;
+    out_color = in_color;
+}
+)";
+
+constexpr const char* kOutfitFragGlsl = R"(
+#version 450
+layout(location = 0) in vec2 in_uv;
+layout(location = 1) in vec4 in_color;
+layout(location = 0) out vec4 out_color;
+void main() {
+    out_color = in_color;
+}
+)";
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+float OutfitFloatFromU32(uint32_t bits) {
+  float f;
+  std::memcpy(&f, &bits, sizeof(f));
+  return f;
+}
+
+struct OutfitVertex {
+  float pos[3];
+  float color[4];
+  float uv[2];
+};
+constexpr uint32_t kOutfitVertexStride = sizeof(OutfitVertex);  // 36 bytes
+constexpr uint32_t kOutfitMaxVertices = 4096;
+
+// Read be-float from guest physical memory (big-endian Xbox 360 register format)
+float ReadRegFloat(uint32_t reg_value) {
+  uint32_t swapped = ((reg_value & 0xFF) << 24) | ((reg_value & 0xFF00) << 8) |
+                     ((reg_value >> 8) & 0xFF00) | ((reg_value >> 24) & 0xFF);
+  return OutfitFloatFromU32(swapped);
+}
+
+// Decode a single vertex from guest physical memory given the fetch constant slots.
+// Uses the register file to read current fetch constants.
+void DecodeOutfitVertex(const VulkanCommandProcessor& cp, const RegisterFile& regs,
+                        uint32_t row_index, OutfitVertex& out) {
+  // Slot 1: position (FMT_32_32_32_FLOAT, stride=9 dwords)
+  auto vf1 = regs.GetVertexFetch(1);
+  uint32_t base = static_cast<uint32_t>(vf1.address) << 2;
+  uint32_t row_phys = base + row_index * 9 * 4;  // 9 dword stride
+  out.pos[0] = ReadRegFloat(cp.DaytonaReadPhysicalU32(row_phys + 0));
+  out.pos[1] = ReadRegFloat(cp.DaytonaReadPhysicalU32(row_phys + 4));
+  out.pos[2] = ReadRegFloat(cp.DaytonaReadPhysicalU32(row_phys + 8));
+
+  // Slot 4: color (packed RGBA8 in dword 3 of same 9-dword stride)
+  uint32_t packed = cp.DaytonaReadPhysicalU32(row_phys + 12);
+  out.color[0] = float( packed        & 0xFFu) / 255.0f;
+  out.color[1] = float((packed >>  8) & 0xFFu) / 255.0f;
+  out.color[2] = float((packed >> 16) & 0xFFu) / 255.0f;
+  out.color[3] = float((packed >> 24) & 0xFFu) / 255.0f;
+
+  // Slot 2: UV0 (FMT_32_32_FLOAT, 2 dwords at offset 5-6 of 9-dword stride)
+  out.uv[0] = ReadRegFloat(cp.DaytonaReadPhysicalU32(row_phys + 20));
+  out.uv[1] = ReadRegFloat(cp.DaytonaReadPhysicalU32(row_phys + 24));
+}
+
+// Fill push constants from register file c72-c75 projection matrix
+void FillOutfitPushConstants(const RegisterFile& regs, float* mvp16, float* ndc_scale, float* ndc_offset) {
+  for (uint32_t row = 0; row < 4; ++row) {
+    uint32_t base_idx = 0x4000 + (72 + row) * 4;  // XE_GPU_REG_SHADER_CONSTANT_000_X + c72-c75
+    for (uint32_t col = 0; col < 4; ++col) {
+      mvp16[row * 4 + col] = ReadRegFloat(regs[base_idx + col]);
+    }
+  }
+  ndc_scale[0] = ndc_scale[1] = ndc_scale[2] = 1.0f;
+  ndc_scale[3] = 0.0f;
+  ndc_offset[0] = ndc_offset[1] = ndc_offset[2] = ndc_offset[3] = 0.0f;
+}
+
+}  // namespace
+
+// ── Pipeline Init / Destroy ───────────────────────────────────────────────
+
+bool VulkanCommandProcessor::DaytonaNativeInitDrawPipeline() {
+  auto& s = daytona_draw_state_;
+  if (s.init_attempted) return s.init_ok;
+  s.init_attempted = true;
+  s.init_ok = false;
+
+  const ui::vulkan::VulkanDevice* vd = GetVulkanDevice();
+  if (!vd) { REXGPU_ERROR("DaytonaNative: no Vulkan device"); return false; }
+  const auto& dfn = vd->functions();
+  const VkDevice dev = vd->device();
+
+  // Create pipeline cache
+  if (!daytona_pipeline_cache_initialized_) {
+    VkPipelineCacheCreateInfo ci = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    if (dfn.vkCreatePipelineCache(dev, &ci, nullptr, &daytona_pipeline_cache_) != VK_SUCCESS) {
+      REXGPU_ERROR("DaytonaNative: pipeline cache creation failed");
+      return false;
+    }
+    daytona_pipeline_cache_initialized_ = true;
+  }
+
+  // Compile shaders
+  std::vector<uint32_t> vert_spv, frag_spv;
+  std::string err;
+  if (!CompileGlslToSpirv(VK_SHADER_STAGE_VERTEX_BIT, kOutfitVertGlsl, vert_spv, err) ||
+      !CompileGlslToSpirv(VK_SHADER_STAGE_FRAGMENT_BIT, kOutfitFragGlsl, frag_spv, err)) {
+    REXGPU_ERROR("DaytonaNative: shader compile failed: {}", err);
+    return false;
+  }
+  s.vert_module = ui::vulkan::util::CreateShaderModule(vd, vert_spv.data(), sizeof(uint32_t) * vert_spv.size());
+  s.frag_module = ui::vulkan::util::CreateShaderModule(vd, frag_spv.data(), sizeof(uint32_t) * frag_spv.size());
+  if (!s.vert_module || !s.frag_module) { return false; }
+
+  // Pipeline layout with push constants
+  VkPushConstantRange pc = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128};
+  VkPipelineLayoutCreateInfo pli = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  pli.pushConstantRangeCount = 1;
+  pli.pPushConstantRanges = &pc;
+  if (dfn.vkCreatePipelineLayout(dev, &pli, nullptr, &s.layout) != VK_SUCCESS) { return false; }
+
+  // Shader stages
+  VkPipelineShaderStageCreateInfo stages[2] = {};
+  stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = s.vert_module; stages[0].pName = "main";
+  stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = s.frag_module; stages[1].pName = "main";
+
+  // Vertex input
+  VkVertexInputBindingDescription vb = {0, kOutfitVertexStride, VK_VERTEX_INPUT_RATE_VERTEX};
+  VkVertexInputAttributeDescription attrs[3] = {
+    {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(OutfitVertex, pos)},
+    {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(OutfitVertex, color)},
+    {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(OutfitVertex, uv)},
+  };
+  VkPipelineVertexInputStateCreateInfo vi = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+  vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vb;
+  vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = attrs;
+
+  VkPipelineInputAssemblyStateCreateInfo ia = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+  ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+  VkPipelineViewportStateCreateInfo vp = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+  vp.viewportCount = 1; vp.scissorCount = 1;
+
+  VkPipelineRasterizationStateCreateInfo rs = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+  rs.polygonMode = VK_POLYGON_MODE_FILL; rs.cullMode = VK_CULL_MODE_NONE;
+  rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
+
+  VkPipelineMultisampleStateCreateInfo ms = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+  ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+  VkPipelineColorBlendAttachmentState ba = {};
+  ba.blendEnable = VK_TRUE;
+  ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+  ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+  ba.colorBlendOp = VK_BLEND_OP_ADD;
+  ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+  ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+  ba.alphaBlendOp = VK_BLEND_OP_ADD;
+  ba.colorWriteMask = 0xF;
+  VkPipelineColorBlendStateCreateInfo cb = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+  cb.attachmentCount = 1; cb.pAttachments = &ba;
+
+  VkDynamicState dyns[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+  VkPipelineDynamicStateCreateInfo ds = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+  ds.dynamicStateCount = 2; ds.pDynamicStates = dyns;
+
+  VkFormat cf = VK_FORMAT_R8G8B8A8_UNORM;
+  VkPipelineRenderingCreateInfo dr = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+  dr.colorAttachmentCount = 1; dr.pColorAttachmentFormats = &cf;
+
+  VkGraphicsPipelineCreateInfo pi = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+  pi.pNext = &dr;
+  pi.stageCount = 2; pi.pStages = stages;
+  pi.pVertexInputState = &vi; pi.pInputAssemblyState = &ia;
+  pi.pViewportState = &vp; pi.pRasterizationState = &rs;
+  pi.pMultisampleState = &ms; pi.pColorBlendState = &cb;
+  pi.pDynamicState = &ds; pi.layout = s.layout;
+
+  // No-depth pipeline
+  if (dfn.vkCreateGraphicsPipelines(dev, daytona_pipeline_cache_, 1, &pi, nullptr, &s.pipeline) != VK_SUCCESS) {
+    REXGPU_ERROR("DaytonaNative: pipeline creation failed");
+    return false;
+  }
+
+  // Depth variant
+  VkFormat df = render_target_cache_ ? render_target_cache_->GetDepthVulkanFormat(xenos::DepthRenderTargetFormat::kD24S8) : VK_FORMAT_UNDEFINED;
+  if (df != VK_FORMAT_UNDEFINED) {
+    VkPipelineDepthStencilStateCreateInfo dss = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dss.depthTestEnable = VK_TRUE; dss.depthWriteEnable = VK_TRUE;
+    dss.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    dr.depthAttachmentFormat = df;
+    pi.pDepthStencilState = &dss;
+    if (dfn.vkCreateGraphicsPipelines(dev, daytona_pipeline_cache_, 1, &pi, nullptr, &s.pipeline_depth) != VK_SUCCESS) {
+      REXGPU_WARN("DaytonaNative: depth pipeline creation failed");
+      s.pipeline_depth = VK_NULL_HANDLE;
+    }
+  }
+
+  // Vertex buffer pool
+  s.vb_pool = std::make_unique<ui::vulkan::VulkanUploadBufferPool>(
+      vd, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+      std::max(size_t(65536), size_t(kOutfitMaxVertices * kOutfitVertexStride)));
+
+  s.texture_sets.resize(s.kMaxTextureSets);
+  s.init_ok = true;
+  REXLOG_INFO("DaytonaNative: draw pipeline initialized");
+  return true;
+}
+
+void VulkanCommandProcessor::DaytonaNativeDestroyDrawPipeline() {
+  auto& s = daytona_draw_state_;
+  const ui::vulkan::VulkanDevice* vd = GetVulkanDevice();
+  if (!vd) return;
+  const auto& dfn = vd->functions();
+  const VkDevice dev = vd->device();
+
+  s.vb_pool.reset();
+  for (auto& e : s.texture_sets) { e.dset = VK_NULL_HANDLE; e.key = 0; }
+  s.texture_sets_next = 0;
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, dev, s.pipeline_depth);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, dev, s.pipeline);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipelineLayout, dev, s.layout);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyShaderModule, dev, s.frag_module);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyShaderModule, dev, s.vert_module);
+  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroySampler, dev, s.sampler);
+  if (daytona_pipeline_cache_initialized_) {
+    dfn.vkDestroyPipelineCache(dev, daytona_pipeline_cache_, nullptr);
+    daytona_pipeline_cache_ = VK_NULL_HANDLE;
+    daytona_pipeline_cache_initialized_ = false;
+  }
+  s.init_attempted = false; s.init_ok = false;
+}
+
+void VulkanCommandProcessor::DaytonaNativeReclaimFrame(uint64_t completed_frame) {
+  auto& s = daytona_draw_state_;
+  for (auto& e : s.texture_sets) {
+    if (e.dset != VK_NULL_HANDLE && e.last_used_frame + 3 < completed_frame) {
+      e.key = 0; e.dset = VK_NULL_HANDLE;
+    }
+  }
+  if (s.vb_pool) s.vb_pool->Reclaim(completed_frame);
+}
+
+// ── Native draw dispatch ─────────────────────────────────────────────────
 
 bool VulkanCommandProcessor::DaytonaNativeIssueDraw(xenos::PrimitiveType prim_type,
                                                      uint32_t index_count,
                                                      const DaytonaIndexBufferInfo* ibi) {
-  return false;  // STUB: fall back to Xenos
+  if (!REXCVAR_GET(vulkan_submit_on_primary_buffer_end)) return false;
+  if (!register_file_) return false;
+
+  Shader* vs = active_vertex_shader();
+  Shader* ps = active_pixel_shader();
+  if (!vs || !ps) return false;
+
+  uint64_t vsh = vs->ucode_data_hash();
+  uint64_t psh = ps->ucode_data_hash();
+  if (vsh != 0x1F507B4D4BFA7D7C) return false;
+
+  if (!DaytonaNativeInitDrawPipeline()) return false;
+  auto& s = daytona_draw_state_;
+  if (!s.init_ok) return false;
+
+  const auto& regs = *register_file_;
+  const uint32_t frame = frame_current_;
+
+  if (prim_type != xenos::PrimitiveType::kTriangleList) return false;
+  if (index_count == 0) return false;
+  uint32_t vertex_count = index_count;
+
+  bool has_depth = false;
+  {
+    auto dinfo = regs.Get<reg::RB_DEPTH_INFO>();
+    auto dctl = regs.Get<reg::RB_DEPTHCONTROL>();
+    has_depth = dinfo.depth_format != xenos::DepthRenderTargetFormat::kUnknown &&
+                (dctl.depth_enable != 0);
+  }
+
+  VkPipeline pipe = has_depth && s.pipeline_depth ? s.pipeline_depth : s.pipeline;
+  if (!pipe) return false;
+
+  // Allocate vertex buffer via upload pool
+  uint32_t vb_size = (vertex_count + 1) * kOutfitVertexStride;
+  VkBuffer vbuf = VK_NULL_HANDLE;
+  VkDeviceSize vb_offset = 0;
+  uint8_t* vtx_data = s.vb_pool->Request(frame, vb_size, 4, vbuf, vb_offset);
+  if (!vtx_data || vbuf == VK_NULL_HANDLE) return false;
+
+  OutfitVertex* vertices = reinterpret_cast<OutfitVertex*>(vtx_data);
+  for (uint32_t i = 0; i < vertex_count; ++i) {
+    DecodeOutfitVertex(*this, regs, i, vertices[i]);
+  }
+
+  float mvp[16], ndc_scale[4], ndc_offset[4];
+  FillOutfitPushConstants(regs, mvp, ndc_scale, ndc_offset);
+
+  if (!BeginSubmission(true)) return false;
+
+  // Bind pipeline via deferred command buffer CmdVk API
+  deferred_command_buffer_.CmdVkBindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+
+  struct { float mvp[16]; float ndc_scale[4]; float ndc_offset[4]; } pc;
+  memcpy(pc.mvp, mvp, sizeof(mvp));
+  memcpy(pc.ndc_scale, ndc_scale, sizeof(ndc_scale));
+  memcpy(pc.ndc_offset, ndc_offset, sizeof(ndc_offset));
+  deferred_command_buffer_.CmdVkPushConstants(s.layout,
+      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+  // Bind vertex buffer
+  deferred_command_buffer_.CmdVkBindVertexBuffers(0, 1, &vbuf, &vb_offset);
+
+  // Viewport & scissor
+  uint32_t surf = regs[reg::RB_SURFACE_INFO::register_index];
+  uint32_t pitch = surf & 0x3FFF;
+  uint32_t height = 1344;
+  VkViewport vp = {0, float(height), float(pitch), -float(height), 0.0f, 1.0f};
+  VkRect2D sc = {{0, 0}, {int32_t(pitch), int32_t(height)}};
+  deferred_command_buffer_.CmdVkSetViewport(0, 1, &vp);
+  deferred_command_buffer_.CmdVkSetScissor(0, 1, &sc);
+
+  deferred_command_buffer_.CmdVkDraw(vertex_count, 1, 0, 0);
+
+  REXLOG_TRACE("DaytonaNative: issued {} verts vs={:016X} ps={:016X}",
+               vertex_count, vsh, psh);
+  return true;
 }
 
 bool VulkanCommandProcessor::DaytonaNativeIssuePointList(uint32_t index_count,
                                                           const DaytonaIndexBufferInfo* ibi) {
-  return false;  // STUB: fall back to Xenos
+  return false;  // Not yet implemented for The Outfit
 }
 
 bool VulkanCommandProcessor::DaytonaNativeIssueMesh(xenos::PrimitiveType prim_type,
                                                      uint32_t index_count,
                                                      const DaytonaIndexBufferInfo* ibi) {
-  return false;  // STUB: fall back to Xenos
+  return false;  // Not yet implemented for The Outfit
 }
 
 bool VulkanCommandProcessor::DaytonaNativeIssueDrawImpl(xenos::PrimitiveType prim_type,
@@ -4470,8 +4820,10 @@ bool VulkanCommandProcessor::DaytonaNativeIssueMeshImpl(xenos::PrimitiveType pri
 
 VulkanCommandProcessor::DaytonaNativeVkObjects VulkanCommandProcessor::DaytonaGetNativeVkObjects() const {
   DaytonaNativeVkObjects obj;
-  obj.vk_device = reinterpret_cast<uint64_t>(device_);
-  obj.vk_physical_device = reinterpret_cast<uint64_t>(physical_device_);
+  if (const auto* vd = GetVulkanDevice()) {
+    obj.vk_device = reinterpret_cast<uint64_t>(vd->device());
+    obj.vk_physical_device = reinterpret_cast<uint64_t>(vd->physical_device());
+  }
   return obj;
 }
 

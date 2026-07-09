@@ -286,6 +286,11 @@ class VulkanCommandProcessor : public CommandProcessor {
                                   const DaytonaIndexBufferInfo* ibi) override;
   DaytonaNativeVkObjects DaytonaGetNativeVkObjects() const override;
 
+  // Daytona native rendering pipeline management
+  bool DaytonaNativeInitDrawPipeline();
+  void DaytonaNativeDestroyDrawPipeline();
+  void DaytonaNativeReclaimFrame(uint64_t completed_frame);
+
   void InitializeTrace() override;
 
  private:
@@ -860,6 +865,36 @@ class VulkanCommandProcessor : public CommandProcessor {
 
   // Temporary storage for memexport stream constants used in the draw.
   std::vector<draw_util::MemExportRange> memexport_ranges_;
+
+  // ── Daytona native renderer pipeline cache ────────────────────────────
+  // Shared across all Daytona pipelines for reuse.
+  VkPipelineCache daytona_pipeline_cache_ = VK_NULL_HANDLE;
+  bool daytona_pipeline_cache_initialized_ = false;
+
+  // QuadList / UI overlay pipeline state.
+  struct {
+    bool init_attempted = false;
+    bool init_ok = false;
+    VkShaderModule vert_module = VK_NULL_HANDLE;
+    VkShaderModule frag_module = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dset_layout = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline pipeline_depth = VK_NULL_HANDLE;
+    std::unique_ptr<ui::vulkan::VulkanUploadBufferPool> vb_pool;
+    // Per-texture-pair descriptor set cache: key = (uint64_t(tex0_view) << 32) | tex1_view.
+    struct TexPairEntry {
+      uint64_t key = 0;
+      VkDescriptorSet dset = VK_NULL_HANDLE;
+      uint64_t last_used_frame = 0;
+    };
+    std::vector<TexPairEntry> texture_sets;
+    uint32_t texture_sets_next = 0;
+    static constexpr uint32_t kMaxTextureSets = 256;
+    static constexpr uint32_t kMaxVertices = 4096;
+    static constexpr uint32_t kVertexStride = 48;
+  } daytona_draw_state_;
 };
 
 }  // namespace rex::graphics::vulkan
