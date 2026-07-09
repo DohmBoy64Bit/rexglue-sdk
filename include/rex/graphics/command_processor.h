@@ -90,6 +90,7 @@ class CommandProcessor {
 
   Shader* active_vertex_shader() const { return active_vertex_shader_; }
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
+  RegisterFile* GetRegisterFile() const { return register_file_; }
 
   virtual bool Initialize();
   virtual void Shutdown();
