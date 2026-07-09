@@ -86,6 +86,9 @@ using namespace rex::graphics::xenos;
 
 namespace {
 
+// Daytona native rendering draw hook storage.
+static CommandProcessor::DaytonaDrawHook s_daytona_draw_hook = nullptr;
+
 ReadbackResolveMode ParseReadbackResolveMode(std::string_view value) {
   if (value == "fast") {
     return ReadbackResolveMode::kFast;
@@ -115,6 +118,32 @@ CommandProcessor::CommandProcessor(GraphicsSystem* graphics_system,
 }
 
 CommandProcessor::~CommandProcessor() = default;
+
+void CommandProcessor::SetDaytonaDrawHook(DaytonaDrawHook hook) {
+  s_daytona_draw_hook = hook;
+}
+
+CommandProcessor::DaytonaDrawHook CommandProcessor::GetDaytonaDrawHook() {
+  return s_daytona_draw_hook;
+}
+
+bool CommandProcessor::TryDaytonaDrawHook(CommandProcessor* cp,
+                                          xenos::PrimitiveType prim_type,
+                                          uint32_t index_count,
+                                          const IndexBufferInfo* ibi,
+                                          bool major_mode_explicit) {
+  if (!s_daytona_draw_hook) return false;
+  DaytonaIndexBufferInfo dibi = {};
+  if (ibi) {
+    dibi.format = static_cast<uint32_t>(ibi->format);
+    dibi.endianness = static_cast<uint32_t>(ibi->endianness);
+    dibi.count = ibi->count;
+    dibi.guest_base = ibi->guest_base;
+    dibi.length = ibi->length;
+  }
+  return s_daytona_draw_hook(cp, prim_type, index_count,
+                             ibi ? &dibi : nullptr, major_mode_explicit);
+}
 
 bool CommandProcessor::Initialize() {
   // Initialize the gamma ramps to their default (linear) values - taken from

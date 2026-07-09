@@ -3607,6 +3607,12 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
+  // Daytona native rendering hook — returns true if native path handled the draw.
+  if (TryDaytonaDrawHook(this, prim_type, index_count, index_buffer_info,
+                         major_mode_explicit)) {
+    return true;
+  }
+
   const RegisterFile& regs = *register_file_;
   (void)index_buffer_info;
   auto draw_fail = [&](const char* stage) {

@@ -1813,7 +1813,8 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
 BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
                                     const CodeRegion& containingRegion,
                                     const std::unordered_set<uint32_t>& knownFunctions,
-                                    uint32_t pdataSize) {
+                                    uint32_t pdataSize,
+                                    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables) {
   BlockDiscoveryResult result;
   std::unordered_set<uint32_t> visited;
   std::unordered_set<uint32_t> blockStarts;
@@ -1902,7 +1903,19 @@ BlockDiscoveryResult discoverBlocks(DecodedBinary& decoded, uint32_t entryPoint,
           // bctr - try to detect jump table
           REXCODEGEN_TRACE("discoverBlocks: bctr at 0x{:08X} in func 0x{:08X}, funcEnd=0x{:08X}",
                            addr, entryPoint, funcEnd);
-          auto jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
+          std::optional<JumpTable> jt;
+          if (manualSwitchTables) {
+            auto manualIt = manualSwitchTables->find(addr);
+            if (manualIt != manualSwitchTables->end()) {
+              jt = manualIt->second;
+              REXCODEGEN_TRACE(
+                  "discoverBlocks: using manual jump table at bctr 0x{:08X} with {} targets", addr,
+                  jt->targets.size());
+            }
+          }
+          if (!jt) {
+            jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
+          }
           if (jt) {
             REXCODEGEN_TRACE("discoverBlocks: detected jump table at bctr 0x{:08X} with {} targets",
                              addr, jt->targets.size());

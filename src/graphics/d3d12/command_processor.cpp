@@ -2299,6 +2299,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
+  // Daytona native rendering hook — returns true if native path handled the draw.
+  if (TryDaytonaDrawHook(this, primitive_type, index_count, index_buffer_info,
+                         major_mode_explicit)) {
+    return true;
+  }
+
   ID3D12Device* device = GetD3D12Provider().GetDevice();
   const RegisterFile& regs = *register_file_;
 

@@ -143,6 +143,25 @@ class CommandProcessor {
   bool Save(::rex::stream::ByteStream* stream);
   bool Restore(::rex::stream::ByteStream* stream);
 
+  // ── Daytona native rendering draw hook ───────────────────────────────────
+  struct DaytonaIndexBufferInfo {
+    xenos::IndexFormat format = xenos::IndexFormat::kInt16;
+    xenos::Endian endianness = xenos::Endian::kNone;
+    uint32_t count = 0;
+    uint32_t guest_base = 0;
+    size_t length = 0;
+  };
+  using DaytonaDrawHook = bool (*)(CommandProcessor* cp, xenos::PrimitiveType prim_type,
+                                   uint32_t index_count,
+                                   const DaytonaIndexBufferInfo* index_buffer_info,
+                                   bool major_mode_explicit);
+  static void SetDaytonaDrawHook(DaytonaDrawHook hook);
+  static DaytonaDrawHook GetDaytonaDrawHook();
+  // Call from IssueDraw implementations; returns true if native path handled it.
+  static bool TryDaytonaDrawHook(CommandProcessor* cp, xenos::PrimitiveType prim_type,
+                                 uint32_t index_count, const IndexBufferInfo* ibi,
+                                 bool major_mode_explicit);
+
  protected:
   struct IndexBufferInfo {
     xenos::IndexFormat format = xenos::IndexFormat::kInt16;
