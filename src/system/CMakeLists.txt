@@ -88,8 +88,11 @@ if(WIN32)
 endif()
 
 if(REXGLUE_USE_D3D12)
-    target_link_libraries(rexruntime PUBLIC dxgi dxguid dxc-headers)
     target_compile_definitions(rexruntime PUBLIC REX_HAS_D3D12=1)
+    target_link_libraries(rexruntime PUBLIC dxguid dxc-headers)
+endif()
+if(REXGLUE_USE_D3D12 OR REXGLUE_USE_VULKAN)
+    target_link_libraries(rexruntime PUBLIC dxgi)
 endif()
 if(REXGLUE_USE_VULKAN)
     target_link_libraries(rexruntime PUBLIC
