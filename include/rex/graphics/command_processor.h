@@ -158,8 +158,9 @@ class CommandProcessor {
   static void SetDaytonaDrawHook(DaytonaDrawHook hook);
   static DaytonaDrawHook GetDaytonaDrawHook();
   // Call from IssueDraw implementations; returns true if native path handled it.
+  // Takes the public DaytonaIndexBufferInfo (converted from protected IndexBufferInfo at the call site).
   static bool TryDaytonaDrawHook(CommandProcessor* cp, xenos::PrimitiveType prim_type,
-                                 uint32_t index_count, const IndexBufferInfo* ibi,
+                                 uint32_t index_count, const DaytonaIndexBufferInfo* dibi,
                                  bool major_mode_explicit);
 
  protected:

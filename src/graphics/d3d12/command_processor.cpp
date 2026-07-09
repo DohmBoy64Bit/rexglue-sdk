@@ -2300,9 +2300,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
   // Daytona native rendering hook — returns true if native path handled the draw.
-  if (TryDaytonaDrawHook(this, primitive_type, index_count, index_buffer_info,
-                         major_mode_explicit)) {
-    return true;
+  {
+    DaytonaIndexBufferInfo dibi = {};
+    if (index_buffer_info) {
+      dibi.format = index_buffer_info->format;
+      dibi.endianness = index_buffer_info->endianness;
+      dibi.count = index_buffer_info->count;
+      dibi.guest_base = index_buffer_info->guest_base;
+      dibi.length = index_buffer_info->length;
+    }
+    if (TryDaytonaDrawHook(this, primitive_type, index_count,
+                           index_buffer_info ? &dibi : nullptr,
+                           major_mode_explicit)) {
+      return true;
+    }
   }
 
   ID3D12Device* device = GetD3D12Provider().GetDevice();
