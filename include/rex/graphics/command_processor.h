@@ -92,6 +92,21 @@ class CommandProcessor {
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
   RegisterFile* GetRegisterFile() const { return register_file_; }
 
+  uint32_t DaytonaReadPhysicalU32(uint32_t physical_address) const {
+    if (!memory_) return 0;
+    const uint8_t* p = memory_->TranslatePhysical(physical_address & ~uint32_t(3));
+    if (!p) return 0;
+    uint32_t raw;
+    std::memcpy(&raw, p, sizeof(raw));
+    return __builtin_bswap32(raw);
+  }
+
+  struct DaytonaNativeVkObjects {
+    uint64_t vk_device = 0;
+    uint64_t vk_physical_device = 0;
+  };
+  virtual DaytonaNativeVkObjects DaytonaGetNativeVkObjects() const { return {}; }
+
   virtual bool Initialize();
   virtual void Shutdown();
 
@@ -163,6 +178,38 @@ class CommandProcessor {
   static bool TryDaytonaDrawHook(CommandProcessor* cp, xenos::PrimitiveType prim_type,
                                  uint32_t index_count, const DaytonaIndexBufferInfo* dibi,
                                  bool major_mode_explicit);
+
+  // ── Daytona native draw submission (overridden in backend CPs) ─────────────
+  virtual bool DaytonaNativeIssueDraw(xenos::PrimitiveType /*prim_type*/,
+                                      uint32_t /*index_count*/,
+                                      const DaytonaIndexBufferInfo* /*ibi*/) {
+    return false;
+  }
+  virtual bool DaytonaNativeIssuePointList(uint32_t /*index_count*/,
+                                           const DaytonaIndexBufferInfo* /*ibi*/) {
+    return false;
+  }
+  virtual bool DaytonaNativeIssueMesh(xenos::PrimitiveType /*prim_type*/,
+                                      uint32_t /*index_count*/,
+                                      const DaytonaIndexBufferInfo* /*ibi*/) {
+    return false;
+  }
+
+  // Project-callable wrappers — the Vulkan CP override forwards to Impl.
+  virtual bool DaytonaNativeIssueDrawImpl(xenos::PrimitiveType prim_type,
+                                          uint32_t index_count,
+                                          const DaytonaIndexBufferInfo* ibi) {
+    return DaytonaNativeIssueDraw(prim_type, index_count, ibi);
+  }
+  virtual bool DaytonaNativeIssuePointListImpl(uint32_t index_count,
+                                               const DaytonaIndexBufferInfo* ibi) {
+    return DaytonaNativeIssuePointList(index_count, ibi);
+  }
+  virtual bool DaytonaNativeIssueMeshImpl(xenos::PrimitiveType prim_type,
+                                          uint32_t index_count,
+                                          const DaytonaIndexBufferInfo* ibi) {
+    return DaytonaNativeIssueMesh(prim_type, index_count, ibi);
+  }
 
  protected:
   struct IndexBufferInfo {

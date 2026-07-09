@@ -2947,6 +2947,42 @@ bool D3D12CommandProcessor::IssueCopy() {
   return IssueCopy_ReadbackResolvePath();
 }
 
+// ── Daytona native draw submission stubs ──────────────────────────────────────
+
+bool D3D12CommandProcessor::DaytonaNativeIssueDraw(xenos::PrimitiveType prim_type,
+                                                    uint32_t index_count,
+                                                    const DaytonaIndexBufferInfo* ibi) {
+  return false;  // STUB: fall back to Xenos
+}
+
+bool D3D12CommandProcessor::DaytonaNativeIssuePointList(uint32_t index_count,
+                                                         const DaytonaIndexBufferInfo* ibi) {
+  return false;  // STUB: fall back to Xenos
+}
+
+bool D3D12CommandProcessor::DaytonaNativeIssueMesh(xenos::PrimitiveType prim_type,
+                                                    uint32_t index_count,
+                                                    const DaytonaIndexBufferInfo* ibi) {
+  return false;  // STUB: fall back to Xenos
+}
+
+bool D3D12CommandProcessor::DaytonaNativeIssueDrawImpl(xenos::PrimitiveType prim_type,
+                                                        uint32_t index_count,
+                                                        const DaytonaIndexBufferInfo* ibi) {
+  return DaytonaNativeIssueDraw(prim_type, index_count, ibi);
+}
+
+bool D3D12CommandProcessor::DaytonaNativeIssuePointListImpl(uint32_t index_count,
+                                                             const DaytonaIndexBufferInfo* ibi) {
+  return DaytonaNativeIssuePointList(index_count, ibi);
+}
+
+bool D3D12CommandProcessor::DaytonaNativeIssueMeshImpl(xenos::PrimitiveType prim_type,
+                                                        uint32_t index_count,
+                                                        const DaytonaIndexBufferInfo* ibi) {
+  return DaytonaNativeIssueMesh(prim_type, index_count, ibi);
+}
+
 bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   uint32_t written_address, written_length;
   if (!render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_, written_address,

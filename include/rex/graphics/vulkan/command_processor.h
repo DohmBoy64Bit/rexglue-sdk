@@ -271,6 +271,21 @@ class VulkanCommandProcessor : public CommandProcessor {
                  IndexBufferInfo* index_buffer_info, bool major_mode_explicit) override;
   bool IssueCopy() override;
 
+  // Daytona native draw submission overrides
+  bool DaytonaNativeIssueDraw(xenos::PrimitiveType prim_type, uint32_t index_count,
+                              const DaytonaIndexBufferInfo* ibi) override;
+  bool DaytonaNativeIssuePointList(uint32_t index_count,
+                                   const DaytonaIndexBufferInfo* ibi) override;
+  bool DaytonaNativeIssueMesh(xenos::PrimitiveType prim_type, uint32_t index_count,
+                              const DaytonaIndexBufferInfo* ibi) override;
+  bool DaytonaNativeIssueDrawImpl(xenos::PrimitiveType prim_type, uint32_t index_count,
+                                  const DaytonaIndexBufferInfo* ibi) override;
+  bool DaytonaNativeIssuePointListImpl(uint32_t index_count,
+                                       const DaytonaIndexBufferInfo* ibi) override;
+  bool DaytonaNativeIssueMeshImpl(xenos::PrimitiveType prim_type, uint32_t index_count,
+                                  const DaytonaIndexBufferInfo* ibi) override;
+  DaytonaNativeVkObjects DaytonaGetNativeVkObjects() const override;
+
   void InitializeTrace() override;
 
  private:

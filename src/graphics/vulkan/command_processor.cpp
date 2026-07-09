@@ -4430,6 +4430,51 @@ bool VulkanCommandProcessor::IssueCopy() {
   return IssueCopy_ReadbackResolvePath();
 }
 
+// ── Daytona native draw submission stubs ──────────────────────────────────────
+// Overrides return false to fall back to Xenos emulation path.
+// Future: implement Vulkan PSO creation, vertex decode, and draw submission.
+
+bool VulkanCommandProcessor::DaytonaNativeIssueDraw(xenos::PrimitiveType prim_type,
+                                                     uint32_t index_count,
+                                                     const DaytonaIndexBufferInfo* ibi) {
+  return false;  // STUB: fall back to Xenos
+}
+
+bool VulkanCommandProcessor::DaytonaNativeIssuePointList(uint32_t index_count,
+                                                          const DaytonaIndexBufferInfo* ibi) {
+  return false;  // STUB: fall back to Xenos
+}
+
+bool VulkanCommandProcessor::DaytonaNativeIssueMesh(xenos::PrimitiveType prim_type,
+                                                     uint32_t index_count,
+                                                     const DaytonaIndexBufferInfo* ibi) {
+  return false;  // STUB: fall back to Xenos
+}
+
+bool VulkanCommandProcessor::DaytonaNativeIssueDrawImpl(xenos::PrimitiveType prim_type,
+                                                         uint32_t index_count,
+                                                         const DaytonaIndexBufferInfo* ibi) {
+  return DaytonaNativeIssueDraw(prim_type, index_count, ibi);
+}
+
+bool VulkanCommandProcessor::DaytonaNativeIssuePointListImpl(uint32_t index_count,
+                                                              const DaytonaIndexBufferInfo* ibi) {
+  return DaytonaNativeIssuePointList(index_count, ibi);
+}
+
+bool VulkanCommandProcessor::DaytonaNativeIssueMeshImpl(xenos::PrimitiveType prim_type,
+                                                         uint32_t index_count,
+                                                         const DaytonaIndexBufferInfo* ibi) {
+  return DaytonaNativeIssueMesh(prim_type, index_count, ibi);
+}
+
+VulkanCommandProcessor::DaytonaNativeVkObjects VulkanCommandProcessor::DaytonaGetNativeVkObjects() const {
+  DaytonaNativeVkObjects obj;
+  obj.vk_device = reinterpret_cast<uint64_t>(device_);
+  obj.vk_physical_device = reinterpret_cast<uint64_t>(physical_device_);
+  return obj;
+}
+
 bool VulkanCommandProcessor::IssueCopy_ReadbackResolvePath() {
   const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
   const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
