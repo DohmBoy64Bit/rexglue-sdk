@@ -291,6 +291,47 @@ class VulkanCommandProcessor : public CommandProcessor {
   void DaytonaNativeDestroyDrawPipeline();
   void DaytonaNativeReclaimFrame(uint64_t completed_frame);
 
+  // ── Daytona native execution context (exposes GPU state to project renderer) ─
+  struct DaytonaNativeExecContext {
+    VulkanCommandProcessor* cp = nullptr;
+    VkDevice device = VK_NULL_HANDLE;
+    const ui::vulkan::VulkanDevice::Functions* dfn = nullptr;
+    const ui::vulkan::VulkanDevice* vulkan_device = nullptr;
+    VkPipelineCache daytona_pipeline_cache = VK_NULL_HANDLE;
+    uint64_t frame_current = 0;
+    const RegisterFile* register_file = nullptr;
+    VulkanRenderTargetCache* render_target_cache = nullptr;
+    VulkanTextureCache* texture_cache = nullptr;
+    VulkanPipelineCache* pipeline_cache = nullptr;
+    VulkanSharedMemory* shared_memory = nullptr;
+    DeferredCommandBuffer* deferred_cmd = nullptr;
+    Shader* active_vs = nullptr;
+    Shader* active_ps = nullptr;
+
+    bool BeginSubmission(bool is_guest = true) const;
+    void SubmitBarriersAndEnterRenderPass(VkRenderPass render_pass,
+        const VulkanRenderTargetCache::Framebuffer* framebuffer) const;
+    void UpdateDynamicState(const draw_util::ViewportInfo& viewport_info,
+        bool primitive_polygonal, const reg::RB_DEPTHCONTROL& depth_control) const;
+    void BindExternalGraphicsPipeline(VkPipeline pipeline,
+        bool keep_dynamic_depth_bias = false, bool keep_dynamic_stencil_mask_ref = false,
+        bool keep_dynamic_blend_constants = false) const;
+    bool PushImageMemoryBarrier(VkImage image,
+        const VkImageSubresourceRange& subresource_range,
+        VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage,
+        VkAccessFlags src_access, VkAccessFlags dst_access,
+        VkImageLayout old_layout, VkImageLayout new_layout) const;
+  };
+  DaytonaNativeExecContext DaytonaGetExecContext();
+
+  // ── Daytona point list pipeline ────────────────────────────────────────
+  bool DaytonaNativeInitPointPipeline();
+  void DaytonaNativeDestroyPointPipeline();
+
+  // ── Daytona mesh pipeline (TriangleStrip / QuadList) ────────────────────
+  bool DaytonaNativeInitMeshPipeline();
+  void DaytonaNativeDestroyMeshPipeline();
+
   void InitializeTrace() override;
 
  private:
@@ -867,9 +908,40 @@ class VulkanCommandProcessor : public CommandProcessor {
   std::vector<draw_util::MemExportRange> memexport_ranges_;
 
   // ── Daytona native renderer pipeline cache ────────────────────────────
-  // Shared across all Daytona pipelines for reuse.
   VkPipelineCache daytona_pipeline_cache_ = VK_NULL_HANDLE;
   bool daytona_pipeline_cache_initialized_ = false;
+
+  // PointList pipeline state.
+  struct {
+    bool init_attempted = false;
+    bool init_ok = false;
+    VkShaderModule vert_module = VK_NULL_HANDLE;
+    VkShaderModule frag_module = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+  } daytona_point_state_;
+
+  // Mesh (TriangleStrip / QuadList) pipeline state.
+  struct {
+    bool init_attempted = false;
+    bool init_ok = false;
+    VkShaderModule vert_module = VK_NULL_HANDLE;
+    VkShaderModule frag_module = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dset_layout = VK_NULL_HANDLE;
+    VkDescriptorPool dset_pool = VK_NULL_HANDLE;
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline pipeline_noclip = VK_NULL_HANDLE;
+    VkPipeline pipeline_msaa4 = VK_NULL_HANDLE;
+    VkPipeline pipeline_noclip_msaa4 = VK_NULL_HANDLE;
+    VkPipeline pipeline_depth = VK_NULL_HANDLE;
+    VkPipeline pipeline_fan = VK_NULL_HANDLE;
+    VkFormat depth_vk_fmt = VK_FORMAT_UNDEFINED;
+    std::unique_ptr<ui::vulkan::VulkanUploadBufferPool> vb_pool;
+    struct TextureSet { VkImageView view = VK_NULL_HANDLE; VkSampler sampler = VK_NULL_HANDLE; VkDescriptorSet set = VK_NULL_HANDLE; };
+    std::vector<TextureSet> texture_sets;
+  } daytona_mesh_state_;
 
   // QuadList / UI overlay pipeline state.
   struct {
@@ -891,9 +963,6 @@ class VulkanCommandProcessor : public CommandProcessor {
     };
     std::vector<TexPairEntry> texture_sets;
     uint32_t texture_sets_next = 0;
-    static constexpr uint32_t kMaxTextureSets = 256;
-    static constexpr uint32_t kMaxVertices = 4096;
-    static constexpr uint32_t kVertexStride = 48;
   } daytona_draw_state_;
 };
 
